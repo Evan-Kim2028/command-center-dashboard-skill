@@ -277,7 +277,7 @@ for k, r in enumerate(rows):
             if not mm:
                 mm_ = re.search(r'"model":"([^"]+)"', open(bf, errors="ignore").read()); mm = mm_.group(1) if mm_ else "?"
             r["src"] = f"cmd · {mm}"
-    else: r["src"] = "unmatched (Cursor or unseen)"
+    else: r["src"] = "unmatched (Cursor or unreadable)"
 idx_d = [k for k, r in enumerate(rows) if r["date"]]
 for k, r in enumerate(rows):
     if r["date"] or not idx_d: continue
@@ -402,7 +402,7 @@ h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 4px}h2{font-s
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:8px 0 4px}
 .tgwrap{position:relative}.seg.mini{position:absolute;right:12px;top:22px;z-index:3;padding:1px}.seg.mini button{padding:3px 9px;font-size:12px}
 .seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:2px}.seg button{border:0;background:transparent;color:var(--muted);padding:6px 12px;border-radius:6px;font:inherit;font-size:13px;cursor:pointer}.seg button.on{background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
-.tabs{display:flex;gap:2px;position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border)}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tabs{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border);box-shadow:0 8px 16px -12px rgba(0,0,0,.6)}.tabbtns{display:flex;gap:2px}.ctl{display:flex;gap:8px;align-items:center;padding-bottom:8px}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
 .tab{display:none}.tab.on{display:block}.tabdesc{color:var(--muted);margin:14px 0 18px;font-size:14px}
 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:0 0 16px}.kpi div{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow)}.kpi div{font-size:12px;color:var(--muted);letter-spacing:.02em}.kpi b{display:block;font-size:22px;font-weight:600;color:var(--fg);letter-spacing:-.01em;margin-bottom:2px}
 .card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0 0 16px;color:var(--fg)}
@@ -424,8 +424,27 @@ ALL_SESSIONS = sessions
 _pm_all = collections.Counter()
 for s_ in sessions: _pm_all.update(s_["models"])
 ALL_MODELS = [m for m, _ in _pm_all.most_common()]
-_PAL = ["#3ecf8e", "#5b9cf6", "#f5a524", "#ef6b6b", "#a78bfa", "#e879a8", "#22c9d6", "#c8d64b", "#9aa3b2"]
-ALL_MCOLS = {m: _PAL[i % len(_PAL)] for i, m in enumerate(ALL_MODELS)}
+# Color scheme: one hue per provider, shades per model within the provider. Stable for the whole page.
+_HUES = [150, 215, 35, 0, 265, 330, 185, 70, 300, 100, 20, 240]
+def _provider(m):
+    m = m.lower()
+    if "/" in m: return m.split("/")[0]
+    for pfx in ("gpt", "o1", "o3", "o4"): 
+        if m.startswith(pfx): return "openai"
+    if m.startswith("claude"): return "anthropic"
+    if m.startswith("gemini"): return "google"
+    return m.split("-")[0]
+_prov_order = []
+for m in ALL_MODELS:
+    pv = _provider(m)
+    if pv not in _prov_order: _prov_order.append(pv)
+def model_color(m):
+    pv = _provider(m); hue = _HUES[_prov_order.index(pv) % len(_HUES)] if pv in _prov_order else 210
+    sibs = [x for x in ALL_MODELS if _provider(x) == pv]; k = sibs.index(m) if m in sibs else 0
+    light = [55, 68, 42, 78, 34][k % 5]; sat = 62 if k < 5 else 45
+    return f"hsl({hue} {sat}% {light}%)"
+ALL_MCOLS = {m: model_color(m) for m in ALL_MODELS}
+PROVIDER_COLS = {pv: f"hsl({_HUES[i % len(_HUES)]} 62% 55%)" for i, pv in enumerate(_prov_order)}
 def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     rows_r = rows if rows_r is None else rows_r
     def _local(ts):
@@ -499,7 +518,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     pm = collections.defaultdict(collections.Counter)
     for s in sessions:
         for m, c in s["pm"].items(): pm[m].update(c)
-    ml = sorted(pm, key=lambda m: -pm[m]["asst"]); mcols = {m: ALL_MCOLS.get(m, PAL[i % len(PAL)]) for i, m in enumerate(ml)}
+    ml = sorted(pm, key=lambda m: -pm[m]["asst"]); mcols = {m: ALL_MCOLS.get(m, model_color(m)) for m in ml}
 
     # ================= TASTE =================
     tab("Taste")
@@ -513,12 +532,13 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     else: H.append(two(habits_chart, habit_defs))
     OV["habits"] = flex(stacked_h("Work habits by work area", [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl], dl, cols, "Number of bullets", "Work habit", "Whole taste file. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc))
     h3("Where the bullets came from")
-    srcs = collections.Counter(r["src"] for r in rows_r); sl = [k for k, _ in srcs.most_common()]; scols = {k: PAL[i % len(PAL)] for i, k in enumerate(sl)}
+    srcs = collections.Counter(r["src"] for r in rows_r); sl = [k for k, _ in srcs.most_common()]
+    scols = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else {"Claude Code": "hsl(210 10% 62%)"}.get(k, "hsl(210 8% 40%)")) for k in sl}
     weeks_b = collections.OrderedDict()
     for r in sorted(rows_r, key=lambda r: r["date"]):
         wk = (datetime.date.fromisoformat(r["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(r["date"]).weekday())).isoformat()
         weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
-    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from. Cursor transcripts are not readable locally, so those show as unmatched.</p>")
+    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no readable transcript matched: Cursor stores sessions in a database the script does not read, some sessions were deleted or compacted, and some bullets were paraphrased so far that no distinctive words remain.</p>")
     if rows_r: H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
                  flex(stacked_v("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380), legend(scols, "Source", srcs))))
     h3("All bullets")
@@ -616,8 +636,9 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             return nodes
         Ln = layout(src_in, Lx); Rn = layout(cons, Rx - nw)
         mid_h = H_ * 0.9; mid_y = top + (H_ - mid_h) / 2
-        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Left: sessions the learner mined to write bullets (whole file). Right: models whose reasoning consulted bullets in this range. Band width = share.")]
-        scol = {k: PAL[i % len(PAL)] for i, k in enumerate(src_in)}
+        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Left: sessions mined to write bullets (whole file). Right: models whose reasoning consulted bullets in this range. Same model = same color on both sides; same provider = same hue.")]
+        neutral = {"Claude Code": "hsl(210 10% 62%)", "unmatched (Cursor or unreadable)": "hsl(210 8% 40%)"}
+        scol = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else neutral.get(k, "var(--muted)")) for k in src_in}
         out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} bullets in, {sum(cons.values())} consultations out", 0.9))
         out.append(T(Mx, mid_y - 10, "taste.md", 12, "bold", "middle"))
         yl = mid_y
@@ -810,7 +831,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     ov.append(OV.get("timeline", ""))
     ov.append("</div>")
     H[0:0] = ov
-    H.insert(0, "<div class=tabs>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>")
+    H.insert(0, "<div class=tabs><div class=tabbtns>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>" + CTL + "</div>")
 
     return H
 
@@ -824,14 +845,15 @@ for k, lab, hours in RANGES:
     views.append((k, lab, rows, sv, [a for a in acts if a["ts"] >= c], c, {"24h": "hour", "7d": "6h", "30d": "day", "all": "week"}[k]))
 DEFAULT_VIEW = next((k for k, _, _, sv, *_ in views if sv), "all")
 H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names redacted · " if PUBLIC else "") + f"Rendered {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} local · re-run the script to refresh · <code>{esc(redact(TASTE))}</code></p></div>")
-H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")
+CTL = "<div class=ctl><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + "</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div>"
+H.append("</div>")
 for k, lab, rv, sv, av, cut_, gran_ in views:
     H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != DEFAULT_VIEW else "") + ">")
     if rv and sv: H += build("-" + k, rv, sv, av, [r for r in rows if r["date"] >= cut_[:10]], gran=gran_, cut=cut_)
     else: H.append(f"<p class=muted style='padding:24px 0'>No cmd sessions in this range. Pick a wider range above.</p>")
     H.append("</div>")
-H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
-H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
+H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('.tabbtns button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
+H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x.dataset.v===k));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabbtns button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
 H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
 H.append("<script>document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),tb=rows[0]&&rows[0].parentNode;if(!tb)return;if(!tbl._orig)tbl._orig=rows.slice();const state=th.classList.contains('desc')?'asc':th.classList.contains('asc')?'reset':'desc';tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));tbl.classList.remove('sorted');tbl.querySelectorAll('td').forEach(td=>{td.style.background='';td.classList.remove('sortcol')});if(state==='reset'){tbl._orig.forEach(r=>tb.appendChild(r));return;}th.classList.add(state);tbl.classList.add('sorted');const asc=state==='asc';const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};rows.slice().sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));const vals=rows.map(val);const nums=vals.filter(v=>typeof v==='number');const lo=Math.min(...nums),hi=Math.max(...nums);rows.forEach((r,j)=>{const td=r.children[i];if(!td)return;td.classList.add('sortcol');if(typeof vals[j]==='number'&&hi>lo)td.style.background=`color-mix(in srgb, var(--accent) ${Math.round(6+44*(vals[j]-lo)/(hi-lo))}%, transparent)`;});});</script>")
