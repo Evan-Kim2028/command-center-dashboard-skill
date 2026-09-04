@@ -41,11 +41,11 @@ If the user asks for a shareable version, use `--public` and remind them to revi
 
 | Source | Path | Used for |
 |---|---|---|
-| Taste file | `<project>/.commandcode/taste/taste.md`, else `~/.commandcode/taste/taste.md` | bullets, confidence, habits, areas |
+| Taste file | `<project>/.commandcode/taste/taste.md`, else `~/.commandcode/taste/taste.md` | learnings, confidence, habits, areas |
 | Session transcripts | `~/.commandcode/projects/<slug>/*.jsonl` | turns, per-message model + usage + cost, thinking, tool calls, skill calls, prompts |
 | Session meta | `*.meta.json` | session title and model |
 | Learn ledger | `~/.commandcode/projects/<slug>/config.json` | which Claude Code / Cursor sessions taste was mined from |
-| Claude Code transcripts | `~/.claude/projects/*/<id>.jsonl` (only the ids in the ledger) | dating each bullet and naming its source |
+| Claude Code transcripts | `~/.claude/projects/*/<id>.jsonl` (only the ids in the ledger) | dating each learning and naming its source |
 | Cursor transcripts | `~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl` (ledger ids; turn dates parsed from the `<timestamp>` prose) | same |
 | Redaction rules | `<project>/.commandcode/redact.json` or `~/.commandcode/redact.json` (optional) | `--public` builds |
 
@@ -56,27 +56,27 @@ If the current directory has no cmd sessions the script falls back to the projec
 
 Six tabs. Each answers one question; charts are not repeated across tabs.
 
-1. **Overview** (default): Insights card (generated sentences: cost concentration, taste consult leaders, bullet producers, fastest model, taste's effect on reasoning with its causality caveat, models that mention taste without reasoning, unused-bullet share), then logged cost, input tokens, cache hit, a Cost/Tokens toggle on the per-bucket and last-24h charts (tokens split into cached input, uncached input, output), output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused bullets. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
-2. **Taste**: what the file says. Bullets learned in the selected range: habits by work area, where bullets came from (Claude Code / cmd + model / unmatched), bullets learned per week by source, and a paginated bullet table with area, habit, date and text filters, sorted by date descending.
-3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per bullet, most-activated bullets, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
-4. **Models**: per-message attribution. Sankey of taste flow (sources → taste.md → consuming models). Creates-vs-uses is a 100% stacked bar per model (share of its own taste traffic), beside taste traffic per 100 turns. Two-way influence table: bullets written per 100 turns (model → taste) beside activations per 100 turns (taste → model). Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
+1. **Overview** (default): Insights card (generated sentences: cost concentration, taste consult leaders, learning producers, fastest model, taste's effect on reasoning with its causality caveat, models that mention taste without reasoning, unused-learning share), then logged cost, input tokens, cache hit, a Cost/Tokens toggle on the per-bucket and last-24h charts (tokens split into cached input, uncached input, output), output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused learnings. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per learning by habit, activations by habit, habits by work area, session timeline.
+2. **Taste**: what the file says. Learnings learned in the selected range: habits by work area, where learnings came from (Claude Code / cmd + model / unmatched), learnings learned per week by source, and a paginated learning table with area, habit, date and text filters, sorted by date descending.
+3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per learning, most-activated learnings, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
+4. **Models**: per-message attribution. Sankey of taste flow (sources → taste.md → consuming models). Creates-vs-uses is a 100% stacked bar per model (share of its own taste traffic), beside taste traffic per 100 turns. Two-way influence table: learnings written per 100 turns (model → taste) beside activations per 100 turns (taste → model). Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
 5. **Usage**: session timeline bubble chart, prompts per week, tool calls, and prompt openings, prompt length, prompts by hour and weekday each stacked by the model the session ran; sessions table (collapsed, sortable).
-6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, bullet length, base prompt size per session, bullets added over time, never-activated bullets, longest bullets, duplicates.
+6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, learning length, base prompt size per session, learnings added over time, never-activated learnings, longest learnings, duplicates.
 
-Global controls: Today / 7 days / 30 days / All time. Every chart follows the range, including both sides of the sankey and the created-vs-used rates (bullets count as created in a range when their learned-from session falls in it). Time charts adapt their buckets to the range (1 h, 6 h, 1 day, 1 week, local time), each with a Per period / Cumulative switch, and a last-24-hours hourly strip stays on Overview in every range. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
+Global controls: Today / 7 days / 30 days / All time. Every chart follows the range, including both sides of the sankey and the created-vs-used rates (learnings count as created in a range when their learned-from session falls in it). Time charts adapt their buckets to the range (1 h, 6 h, 1 day, 1 week, local time), each with a Per period / Cumulative switch, and a last-24-hours hourly strip stays on Overview in every range. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
 
 ## Definitions the script uses (keep these consistent if you change anything)
 
-- **Bullet**: one `- ...` line in taste.md. Trailing `Confidence: 0.xx` is parsed off.
+- **Learning** (shown as such everywhere; "bullet" in code): one `- ...` line in taste.md. Trailing `Confidence: 0.xx` is parsed off.
 - **Habit**: a recurring way the user wants things done; multi-label, keyword-assigned from `TRAITS`.
-- **Work area**: what a bullet is about; single label from `DOMAINS`; the three largest areas are charted.
-- **Activation**: a `thinking` block in an assistant message that mentions "taste" and shares at least two distinctive words with one bullet.
+- **Work area**: what a learning is about; single label from `DOMAINS`; the three largest areas are charted.
+- **Activation**: a `thinking` block in an assistant message that mentions "taste" and shares at least two distinctive words with one learning.
 - **Steering**: an activation whose sentence continues with so / should / must / instead / before / never / avoid / skip.
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
-- **Bullet date**: earliest learned-from session sharing ≥3 distinctive words with the bullet; undated bullets are interpolated between dated neighbours in file order.
+- **Learning date**: earliest learned-from session sharing ≥3 distinctive words with the learning; undated learnings are interpolated between dated neighbours in file order.
 - **Cost**: `usage.costUsd` as logged; free tiers show 0.
 - **Chain of thought**: thinking = visible reasoning text. Taste effect = mean thinking/reply length/tool calls on taste-consulting turns vs the same model's other thinking turns.
-- **Taste traffic** (was loop intensity): bullets written + bullets consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.
+- **Taste traffic** (was loop intensity): learnings written + learnings consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.
 - **Compact numbers**: 40.1k, 1.2M everywhere; trailing zeros trimmed.
 
 ## Design rules (for anyone extending the page)
@@ -103,7 +103,7 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - New model ids need nothing; they are read from each message.
 - To add a work area or habit, edit `DOMAINS` / `TRAITS` (label, description, regex) near the top of the script.
 - To redact project-specific names for a public build, write `~/.commandcode/redact.json` as `[["regex", "replacement"], ...]`. The username and home path are always redacted.
-- Bullets that match no transcript on disk appear as "unmatched" (source deleted/compacted, or paraphrased beyond recognition).
+- Learnings that match no transcript on disk appear as "unmatched" (source deleted/compacted, or paraphrased beyond recognition).
 
 ## Verify
 

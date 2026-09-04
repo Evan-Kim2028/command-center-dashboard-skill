@@ -76,7 +76,7 @@ if not (os.path.exists(TASTE) and os.path.getsize(TASTE) > 0):
     if t: TASTE = t; print(f"note: using taste file {TASTE}", file=sys.stderr)
 raw = open(TASTE).read() if os.path.exists(TASTE) else ""
 if not raw.strip():
-    print(f"error: no taste bullets found (looked at {TASTE}). Run /taste or cmd learn-taste first.", file=sys.stderr); sys.exit(2)
+    print(f"error: no taste learnings found (looked at {TASTE}). Run /taste or cmd learn-taste first.", file=sys.stderr); sys.exit(2)
 bul = [l[2:].strip() for l in raw.splitlines() if l.startswith("- ")]
 seen = set(); bullets = []
 for b in bul:
@@ -566,26 +566,26 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
 
     # ================= TASTE =================
     tab("Taste")
-    H.append(kpi([("bullets in file", len(rows), "One bullet = one learned preference or fact, stored as a line in taste.md. The whole file is injected regardless of range."), ("learned in this range", len(rows_r), "Bullets whose learned-from session falls inside the selected range."), ("est. tokens", fmt(est_tokens), "Bytes ÷ 4, about ±20%. Sent with every request."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each bullet. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
+    H.append(kpi([("learnings in file", len(rows), "One learning = one learned preference or fact, stored as a line in taste.md. The whole file is injected regardless of range."), ("gained in this range", len(rows_r), "Learnings whose learned-from session falls inside the selected range."), ("est. tokens", fmt(est_tokens), "Bytes ÷ 4, about ±20%. Sent with every request."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each learning. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
     rows_main_r = [r for r in rows_r if r["domain"] in KEEP]; dc_r = collections.Counter(r["domain"] for r in rows_main_r)
     grid = [(t, {d: sum(1 for r in rows_main_r if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl]
-    habits_chart = flex(stacked_h("Work habits by work area", grid, dl, cols, "Number of bullets", "Work habit", "Bullets learned in this range. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc_r))
-    habit_defs = "<p class=muted>A bullet can show more than one habit." + (f" Too small to chart: {', '.join(f'{d} ({k})' for d, k in dc_all.items() if d not in KEEP)}." if len(dc_all) > len(dc) else "") + "</p><ul>" + "".join(f"<li><b>{t}</b>: {d}</li>" for t, d, _ in TRAITS) + "</ul>"
+    habits_chart = flex(stacked_h("Work habits by work area", grid, dl, cols, "Number of learnings", "Work habit", "Learnings learned in this range. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc_r))
+    habit_defs = "<p class=muted>A learning can show more than one habit." + (f" Too small to chart: {', '.join(f'{d} ({k})' for d, k in dc_all.items() if d not in KEEP)}." if len(dc_all) > len(dc) else "") + "</p><ul>" + "".join(f"<li><b>{t}</b>: {d}</li>" for t, d, _ in TRAITS) + "</ul>"
     d0 = min(datetime.date.fromisoformat(r["date"]) for r in rows); d1 = max(datetime.date.fromisoformat(r["date"]) for r in rows); span = max(1, (d1 - d0).days)
-    if not rows_r: H.append("<p class=muted style='padding:12px 0'>No bullets were learned in this range. Widen the range to see the file's content; the whole file is still injected into every prompt.</p>")
+    if not rows_r: H.append("<p class=muted style='padding:12px 0'>No learnings were learned in this range. Widen the range to see the file's content; the whole file is still injected into every prompt.</p>")
     else: H.append(two(habits_chart, habit_defs))
-    OV["habits"] = flex(stacked_h("Work habits by work area", [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl], dl, cols, "Number of bullets", "Work habit", "Whole taste file. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc))
-    h3("Where the bullets came from")
+    OV["habits"] = flex(stacked_h("Work habits by work area", [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl], dl, cols, "Number of learnings", "Work habit", "Whole taste file. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc))
+    h3("Where the learnings came from")
     srcs = collections.Counter(r["src"] for r in rows_r); sl = [k for k, _ in srcs.most_common()]
     scols = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else {"Claude Code": "hsl(210 10% 62%)", "Cursor": "hsl(40 8% 58%)"}.get(k, "hsl(210 8% 40%)")) for k in sl}
     weeks_b = collections.OrderedDict()
     for r in sorted(rows_r, key=lambda r: r["date"]):
         wk = (datetime.date.fromisoformat(r["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(r["date"]).weekday())).isoformat()
         weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
-    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no transcript on disk shared enough distinctive words: the source session was deleted or compacted, or the learner paraphrased the bullet beyond recognition.</p>")
-    if rows_r: H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
-                 tseries("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380, leg=legend(scols, "Source", srcs))))
-    h3("All bullets")
+    H.append("<p class=charttip>Each learning is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no transcript on disk shared enough distinctive words: the source session was deleted or compacted, or the learner paraphrased the learning beyond recognition.</p>")
+    if rows_r: H.append(two(hbars("Learnings by source", [(k, v, "") for k, v in srcs.items()], "Learnings", ylabel="Source", w=620, lw=230),
+                 tseries("Learnings gained per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Learnings", w=620, h=380, leg=legend(scols, "Source", srcs))))
+    h3("All learnings")
     H.append("<p class=muted>Activations = times matched in the model's thinking; steering = of those, changed the plan. Click a column header to sort.</p>")
     bdata = [dict(i=r["i"], area=r["domain"], habits=r["traits"], conf=r["conf"], date=r["date"], src=r["src"], acts=r["acts"], steers=r["steers"], text=r["text"]) for r in rows_r]
     areas = sorted(set(r["domain"] for r in rows_r)); habs = [t for t, _, _ in TRAITS]
@@ -603,19 +603,19 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
              "function render(){const R=rows();const n=Math.max(1,Math.ceil(R.length/st.size));st.page=Math.min(st.page,n-1);const P=R.slice(st.page*st.size,(st.page+1)*st.size);"
              "const numk=['i','conf','acts','steers'];let lo=0,hi=0;if(st._k&&numk.includes(st._k)){const vs=R.map(r=>r[st._k]);lo=Math.min(...vs);hi=Math.max(...vs);}const cell=(k,v,cls)=>{let st_='';if(st._k===k){cls+=' sortcol';if(numk.includes(k)&&hi>lo)st_=` style=\"background:color-mix(in srgb, var(--accent) ${Math.round(6+44*(v-lo)/(hi-lo))}%, transparent)\"`;}return `<td class='${cls}'${st_}>`;};t.innerHTML='<table class=\"'+(st._k?'sorted':'')+'\"><tr>'+cols.map(([k,l])=>`<th data-k='${k}' class='${['i','conf','acts','steers'].includes(k)?'num':''} ${st._k===k?(st.asc?'asc':'desc'):''}'>${l}</th>`).join('')+'</tr>'+P.map(r=>`<tr>${cell('i',r.i,'num')}${r.i}</td>${cell('area',0,'')}${esc(r.area)}</td>${cell('habits',0,'')}${esc(r.habits.join(', ')||'—')}</td>${cell('conf',r.conf,'num')}${r.conf.toFixed(2)}</td>${cell('date',0,'')}${r.date}</td>${cell('src',0,'')}${esc(r.src)}</td>${cell('acts',r.acts,'num')}${r.acts}</td>${cell('steers',r.steers,'num')}${r.steers}</td>${cell('text',0,'')}${esc(r.text)}</td></tr>`).join('')+'</table>';"
              "t.querySelectorAll('th').forEach(h=>h.onclick=()=>{const k=h.dataset.k;const textish=k==='text'||k==='area'||k==='habits'||k==='src';if(st._k!==k){st.sort=k;st.asc=textish;st._k=k;st._n=1;}else if(st._n===1){st.asc=!st.asc;st._n=2;}else{st.sort='date';st.asc=false;st._k=undefined;st._n=0;}render();});"
-             "f.querySelector('[data-k=count]').textContent=R.length+' bullets';p.innerHTML=`<button ${st.page===0?'disabled':''} data-d='-1'>‹ Prev</button><span>Page ${st.page+1} of ${n}</span><button ${st.page>=n-1?'disabled':''} data-d='1'>Next ›</button>`;p.querySelectorAll('button').forEach(b=>b.onclick=()=>{st.page+=+b.dataset.d;render();});}"
+             "f.querySelector('[data-k=count]').textContent=R.length+' learnings';p.innerHTML=`<button ${st.page===0?'disabled':''} data-d='-1'>‹ Prev</button><span>Page ${st.page+1} of ${n}</span><button ${st.page>=n-1?'disabled':''} data-d='1'>Next ›</button>`;p.querySelectorAll('button').forEach(b=>b.onclick=()=>{st.page+=+b.dataset.d;render();});}"
              "f.querySelectorAll('select,input').forEach(el=>el.oninput=()=>{st[el.dataset.k]=el.dataset.k==='q'?el.value.toLowerCase():el.value;st.page=0;render();});render();})();</script>")
 
     # ================= INFLUENCE =================
     tab("Influence")
-    H.append(kpi([("activations", len(acts), "Moments where the model's reasoning mentioned taste and could be matched to one specific bullet."), ("steering", n_steer, "Activations where the sentence went on to change the plan: so, should, instead, before, never."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of all activations, the share that changed what the model did next."), ("turns that consulted taste", f"{100*sum(s['turns_cite'] for s in sessions)/max(1,sum(s['asst'] for s in sessions)):.1f}%", "Share of all assistant turns whose reasoning mentioned taste at all."), ("bullets consulted", len(rows) - len(never), f"Distinct bullets referenced at least once, out of {len(rows)}."), ("skill invocations", sum(1 for e in skill_events if e["sid"] in {s["sid"] for s in sessions}), "Explicit activate_skill calls, for comparison with implicit taste use.")]))
+    H.append(kpi([("activations", len(acts), "Moments where the model's reasoning mentioned taste and could be matched to one specific learning."), ("steering", n_steer, "Activations where the sentence went on to change the plan: so, should, instead, before, never."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of all activations, the share that changed what the model did next."), ("turns that consulted taste", f"{100*sum(s['turns_cite'] for s in sessions)/max(1,sum(s['asst'] for s in sessions)):.1f}%", "Share of all assistant turns whose reasoning mentioned taste at all."), ("learnings consulted", len(rows) - len(never), f"Distinct learnings referenced at least once, out of {len(rows)}."), ("skill invocations", sum(1 for e in skill_events if e["sid"] in {s["sid"] for s in sessions}), "Explicit activate_skill calls, for comparison with implicit taste use.")]))
     hb = [(t, {"steering": sum(1 for a in acts if a["steer"] and t in ROWS_ALL[a["b"]]["traits"]), "mention": sum(1 for a in acts if not a["steer"] and t in ROWS_ALL[a["b"]]["traits"])}) for t in tl]
     c1 = flex(stacked_h("Activations by work habit", hb, ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Activations", "Work habit", "Dark = the thought changed the plan. Light = taste was only mentioned.", w=620), legend({"steering": "var(--bar)", "mention": "var(--bar2)"}, "Kind"))
     tot_t = sum(tc.values()) or 1; tot_a = sum(act_by_trait.values()) or 1
-    c2 = (hbars("How hard each habit's bullets work", [(t, round(act_by_trait.get(t, 0) / max(1, tc.get(t, 0)), 1), f"{act_by_trait.get(t,0)} activations across {tc.get(t,0)} bullets") for t in tl], "Activations per bullet", "Average times a bullet of this habit was consulted. Low = dead weight in the prompt.", ylabel="Work habit", w=620, lw=190))
+    c2 = (hbars("How hard each habit's learnings work", [(t, round(act_by_trait.get(t, 0) / max(1, tc.get(t, 0)), 1), f"{act_by_trait.get(t,0)} activations across {tc.get(t,0)} learnings") for t in tl], "Activations per learning", "Average times a learning of this habit was consulted. Low = dead weight in the prompt.", ylabel="Work habit", w=620, lw=190))
     H.append(two(c1, c2)); OV["infl"] = c1; OV["work"] = c2
     top_b = sorted(rows, key=lambda r: -r["acts"])[:15]
-    c3 = hbars("Most activated bullets", [(f"#{r['i']} " + r["text"][:28] + "…", r["acts"], r["text"]) for r in top_b], "Activations", "Hover a bar for the full bullet", ylabel="Bullet", lw=260, w=620)
+    c3 = hbars("Most activated learnings", [(f"#{r['i']} " + r["text"][:28] + "…", r["acts"], r["text"]) for r in top_b], "Activations", "Hover a bar for the full learning", ylabel="Learning", lw=260, w=620)
     days = sorted(set(a["date"] for a in acts))
     if True:
         hb_ = by_hour([dict(_s="steering" if a["steer"] else "mention", ts=a["ts"]) for a in acts], lambda a: a["ts"][:19])
@@ -635,7 +635,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
                      table(["Date", "Session", "Model", "Skills used", "#Skill calls", "#Taste activations", "#Steering"], sk_rows)))
     else: H.append("<p class=muted>No skill invocations in this range.</p>")
     h3("What steering looks like"); H.append("<details><summary>Show up to 25 steering moments</summary>")
-    for dd, sid, b, q in steer_quotes[:25]: H.append(f"<blockquote><b>{dd} · {sid} · bullet #{b+1}</b><br>{esc(q)}</blockquote>")
+    for dd, sid, b, q in steer_quotes[:25]: H.append(f"<blockquote><b>{dd} · {sid} · learning #{b+1}</b><br>{esc(q)}</blockquote>")
     H.append("</details>")
     if learn_events: H.append(f"<p><b>In-session learn events</b> (the agent called the taste tool): {', '.join(f'{d} ({s})' for d, s in learn_events)}.</p>")
 
@@ -663,9 +663,9 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         bal = round(100 * cr_ / (wr_ + cr_)) if (wr_ + cr_) > 0 else "—"
         tw_rows.append((m, t_, w_, round(wr_, 2), a_, round(cr_, 1), round(100 * ms[m] / max(1, a_)), round(wr_ + cr_, 1), bal))
     h3("Does the model teach taste, or use it?")
-    H.append("<p class=charttip>Two directions, both within the selected range. <b>Creates</b>: new taste bullets learned from this model's sessions. <b>Uses</b>: times this model's reasoning consulted a bullet. Both per 100 turns so long and short sessions compare fairly.</p>")
-    H.append(table(["Model", "#Turns", "#New bullets created", "#Created per 100 turns", "#Times taste used", "#Used per 100 turns", "#Uses that changed the plan %", "#Taste traffic per 100 turns", "#Share of traffic that is use %"], tw_rows))
-    H.append("<p class=charttip><b>Taste traffic</b> = created + used, per 100 turns: how much this model interacts with taste at all. <b>Share that is use</b>: 0% = the model only creates bullets, 100% = it only uses them, 50% = balanced.</p>")
+    H.append("<p class=charttip>Two directions, both within the selected range. <b>Creates</b>: new taste learnings gained from this model's sessions. <b>Uses</b>: times this model's reasoning consulted a learning. Both per 100 turns so long and short sessions compare fairly.</p>")
+    H.append(table(["Model", "#Turns", "#New learnings created", "#Created per 100 turns", "#Times taste used", "#Used per 100 turns", "#Uses that changed the plan %", "#Taste traffic per 100 turns", "#Share of traffic that is use %"], tw_rows))
+    H.append("<p class=charttip><b>Taste traffic</b> = created + used, per 100 turns: how much this model interacts with taste at all. <b>Share that is use</b>: 0% = the model only creates learnings, 100% = it only uses them, 50% = balanced.</p>")
     bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
     # sankey: where taste comes from and who uses it
     src_in = collections.Counter(r["src"] for r in rows_r); cons = collections.Counter(a["model"] for a in acts)
@@ -680,20 +680,20 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             return nodes
         Ln = layout(src_in, Lx); Rn = layout(cons, Rx - nw)
         mid_h = H_ * 0.9; mid_y = top + (H_ - mid_h) / 2
-        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Both sides follow the selected range. Each side is scaled to its own total, so widths are shares within a side, not per-turn rates; see the chart below for rates per 100 turns.")]
+        out = [svg_open(w, h), title_block(w, "Taste flow: where learnings come from, and which models use them", "Both sides follow the selected range. Each side is scaled to its own total, so widths are shares within a side, not per-turn rates; see the chart below for rates per 100 turns.")]
         tot_in, tot_out = sum(src_in.values()), sum(cons.values())
-        out.append(T(Lx, top - 30, "IN · bullets created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} bullets learned in this range, by the session that taught them", 11, fill="var(--muted)"))
-        out.append(T(Rx, top - 30, "OUT · bullets consulted", 13, "bold", "end")); out.append(T(Rx, top - 14, f"{tot_out} consultations in this range, by the model that used them", 11, fill="var(--muted)", anchor="end"))
-        out.append(T(18, top + H_ / 2, "Source of bullets", 12, "bold", "middle", rot=True)); out.append(T(w - 14, top + H_ / 2, "Model using bullets", 12, "bold", "middle", rot=True))
+        out.append(T(Lx, top - 30, "IN · learnings created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} learnings gained in this range, by the session that taught them", 11, fill="var(--muted)"))
+        out.append(T(Rx, top - 30, "OUT · learnings consulted", 13, "bold", "end")); out.append(T(Rx, top - 14, f"{tot_out} consultations in this range, by the model that used them", 11, fill="var(--muted)", anchor="end"))
+        out.append(T(18, top + H_ / 2, "Source of learnings", 12, "bold", "middle", rot=True)); out.append(T(w - 14, top + H_ / 2, "Model using learnings", 12, "bold", "middle", rot=True))
         neutral = {"Claude Code": "hsl(210 10% 62%)", "Cursor": "hsl(40 8% 58%)", "unmatched": "hsl(210 8% 40%)"}
         scol = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else neutral.get(k, "var(--muted)")) for k in src_in}
-        out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} bullets in, {sum(cons.values())} consultations out", 0.9))
+        out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} learnings in, {sum(cons.values())} consultations out", 0.9))
         out.append(T(Mx, mid_y - 10, "taste.md", 12, "bold", "middle"))
         yl = mid_y
         for k, (x, y, hh, v) in Ln.items():
             hh2 = mid_h * v / max(1, sum(src_in.values()))
-            out.append(R(x, y, nw, hh, scol[k], f"{k}: {100*v/max(1,tot_in):.0f}% of bullets ({v})", 0.95))
-            out.append(f"<path d='M{x+nw:.0f},{y:.0f} C{(x+nw+Mx)/2:.0f},{y:.0f} {(x+nw+Mx)/2:.0f},{yl:.0f} {Mx-nw/2:.0f},{yl:.0f} L{Mx-nw/2:.0f},{yl+hh2:.0f} C{(x+nw+Mx)/2:.0f},{yl+hh2:.0f} {(x+nw+Mx)/2:.0f},{y+hh:.0f} {x+nw:.0f},{y+hh:.0f} Z' fill='{scol[k]}' opacity='0.35'><title>{esc(k)} → taste.md: {v} bullets</title></path>")
+            out.append(R(x, y, nw, hh, scol[k], f"{k}: {100*v/max(1,tot_in):.0f}% of learnings ({v})", 0.95))
+            out.append(f"<path d='M{x+nw:.0f},{y:.0f} C{(x+nw+Mx)/2:.0f},{y:.0f} {(x+nw+Mx)/2:.0f},{yl:.0f} {Mx-nw/2:.0f},{yl:.0f} L{Mx-nw/2:.0f},{yl+hh2:.0f} C{(x+nw+Mx)/2:.0f},{yl+hh2:.0f} {(x+nw+Mx)/2:.0f},{y+hh:.0f} {x+nw:.0f},{y+hh:.0f} Z' fill='{scol[k]}' opacity='0.35'><title>{esc(k)} → taste.md: {v} learnings</title></path>")
             out.append(T(x + nw + 8, y + hh / 2 + 4, f"{k} · {100*v/max(1,tot_in):.0f}% ({v})", 12, "600"))
             yl += hh2
         yr = mid_y
@@ -705,14 +705,15 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             yr += hh2
         return "".join(out) + "</svg>"
     if src_in and cons: OV["sankey"] = sankey(src_in, cons); H.append(OV["sankey"])
-    elif cons: OV["sankey"] = "<p class=muted>No bullets were learned in this range, so the taste-flow diagram has no input side. Widen the range to see it.</p>"; H.append(OV["sankey"])
+    elif cons: OV["sankey"] = "<p class=muted>No learnings were learned in this range, so the taste-flow diagram has no input side. Widen the range to see it.</p>"; H.append(OV["sankey"])
     tw_pairs = []
+    W_all = sum(written.values()) or 1; U_all = sum(ma.values()) or 1
     for m in ml:
-        cr_ = 100 * written.get(m, 0) / max(1, pm[m]["asst"]); us_ = 100 * ma[m] / max(1, pm[m]["asst"]); tot_ = cr_ + us_
+        cr_ = written.get(m, 0) / W_all; us_ = ma[m] / U_all; tot_ = cr_ + us_
         if tot_ <= 0 or pm[m]["asst"] < 10: continue
         tw_pairs.append((m, {"creates": round(100 * cr_ / tot_), "uses": round(100 * us_ / tot_)}))
     tw_cols = {"creates": "var(--accent)", "uses": "var(--bar)"}
-    OV["twoway"] = flex(stacked_h("Creates taste vs uses taste, by model", tw_pairs, list(tw_cols), tw_cols, "Share of the model's taste traffic", "Model", "Blue: bullets it created. Grey: bullets it used.", w=620, unit="%", total=False), legend(tw_cols, "Direction"))
+    OV["twoway"] = flex(stacked_h("Creates taste vs uses taste, by model", tw_pairs, list(tw_cols), tw_cols, "Balance of creating vs using taste", "Model", "Blue: its share of all taste created by models. Grey: its share of all taste used. Both normalized, then compared.", w=620, unit="%", total=False), legend(tw_cols, "Direction"))
     H.append(two(OV.get("twoway", ""),
                  hbars("Taste traffic by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Created + used, per 100 turns", "How much the model interacts with taste at all", ylabel="Model", lw=230, w=620)))
     # ---- chain of thought per model, and whether taste changes it ----
@@ -808,27 +809,27 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     def jac(a, b): return len(a & b) / max(1, len(a | b))
     dups = [(i, j) for i in range(len(rows)) for j in range(i + 1, len(rows)) if jac(btoks[rows[i]["i"]-1], btoks[rows[j]["i"]-1]) >= 0.6]
     cc_hist = collections.Counter(round(r["conf"], 2) for r in rows)
-    H.append(kpi([("bytes", fmt(len(raw)), ""), ("over 300 chars", len(long_b), "Long bullets read like incident reports rather than preferences and cost tokens every turn."), ("near-duplicates", len(dups), "Pairs of bullets sharing most of their words."), ("never activated", len(never), "Bullets never referenced in any recorded reasoning."), ("learn events in cmd", len(learn_events), "Times the agent called the taste tool inside a cmd session. Most bullets came from mining other agents' sessions instead.")]))
+    H.append(kpi([("bytes", fmt(len(raw)), ""), ("over 300 chars", len(long_b), "Long learnings read like incident reports rather than preferences and cost tokens every turn."), ("near-duplicates", len(dups), "Pairs of learnings sharing most of their words."), ("never activated", len(never), "Learnings never referenced in any recorded reasoning."), ("learn events in cmd", len(learn_events), "Times the agent called the taste tool inside a cmd session. Most learnings came from mining other agents' sessions instead.")]))
     size_chart = hbars("Base prompt size per session", [(f"{s['date']} {s['title'] or s['sid']}", s["first_in"] or 0, "") for s in sessions], "First-turn input tokens", "Growth over time is mostly the taste file", ylabel="Session", lw=330, w=1240, sort=False)
     len_bins = [(f"{lo}–{lo+99}", sum(1 for r in rows if lo <= r["n"] < lo + 100), "") for lo in range(0, 700, 100)] + [("700+", sum(1 for r in rows if r["n"] >= 700), "")]
-    blen_chart = hbars("Bullet length", len_bins, "Number of bullets", "Characters per bullet. Long bullets read like incident reports and cost tokens every turn.", ylabel="Characters", w=620, lw=110, sort=False)
+    blen_chart = hbars("Learning length", len_bins, "Number of learnings", "Characters per learning. Long learnings read like incident reports and cost tokens every turn.", ylabel="Characters", w=620, lw=110, sort=False)
     byday = collections.Counter(r["date"] for r in rows); W2, H2 = 1240, 190; GX0, GX1 = 70, W2 - 30
-    out = [svg_open(W2, H2), title_block(W2, "Bullets added over time")]
+    out = [svg_open(W2, H2), title_block(W2, "Learnings added over time")]
     acc = 0; pts = []
     for dd in sorted(byday):
         acc += byday[dd]; px = GX0 + (datetime.date.fromisoformat(dd) - d0).days / span * (GX1 - GX0); py = H2 - 30 - acc / len(rows) * (H2 - 70); pts.append(f"{px:.0f},{py:.0f}")
-        out.append(R(px - 2, H2 - 30 - byday[dd] * 4, 4, byday[dd] * 4, "var(--muted)", f"{dd}: {byday[dd]} bullets"))
+        out.append(R(px - 2, H2 - 30 - byday[dd] * 4, 4, byday[dd] * 4, "var(--muted)", f"{dd}: {byday[dd]} learnings"))
     out.append(f"<polyline points='{GX0},{H2-30} {' '.join(pts)}' fill='none' stroke='var(--fg)' stroke-width='2'/>")
     out.append(T(GX0, H2 - 8, d0)); out.append(T(GX1, H2 - 8, d1, anchor="end")); out.append(T(GX0 - 8, 44, len(rows), anchor="end")); out.append(T(GX0 - 8, H2 - 30, 0, anchor="end"))
     growth_chart = "".join(out) + "</svg>"
-    conf_chart = hbars("Confidence distribution", [(f"{c:.2f}", k, "") for c, k in sorted(cc_hist.items(), reverse=True)], "Number of bullets", ylabel="Confidence", w=620, lw=90, sort=False)
+    conf_chart = hbars("Confidence distribution", [(f"{c:.2f}", k, "") for c, k in sorted(cc_hist.items(), reverse=True)], "Number of learnings", ylabel="Confidence", w=620, lw=90, sort=False)
     H.append(two(conf_chart, blen_chart)); H.append(size_chart); H.append(growth_chart); OV["size"] = size_chart
-    h3("Never-activated bullets"); H.append("<p class=muted>Present in every prompt, never referenced in any recorded thinking. Candidates to trim.</p><details><summary>Show " + str(len(never)) + "</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['conf']:.2f}</span> {esc(r['text'][:200])}</li>" for r in never) + "</ul></details>")
-    h3("Longest bullets"); H.append("<details><summary>Show " + str(len(long_b)) + " over 300 chars</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['n']} chars</span> {esc(r['text'][:160])}…</li>" for r in sorted(long_b, key=lambda r: -r["n"])) + "</ul></details>")
+    h3("Never-activated learnings"); H.append("<p class=muted>Present in every prompt, never referenced in any recorded thinking. Candidates to trim.</p><details><summary>Show " + str(len(never)) + "</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['conf']:.2f}</span> {esc(r['text'][:200])}</li>" for r in never) + "</ul></details>")
+    h3("Longest learnings"); H.append("<details><summary>Show " + str(len(long_b)) + " over 300 chars</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['n']} chars</span> {esc(r['text'][:160])}…</li>" for r in sorted(long_b, key=lambda r: -r["n"])) + "</ul></details>")
     if dups: h3("Near-duplicates"); H.append("<ul>" + "".join(f"<li>#{rows[i]['i']} ≈ #{rows[j]['i']}: {esc(rows[i]['text'][:100])}…</li>" for i, j in dups) + "</ul>")
     H.append("</div>")
     ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Cost, speed and taste at a glance.</p>"]
-    ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "What the provider billed in this range. Free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste bullet."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused bullets", len(never), "Bullets injected into every prompt but never consulted in this range.")]))
+    ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "What the provider billed in this range. Free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
     ins = []
     if ml:
         top_cost = max(ml, key=lambda m: pm[m]["cost"]); tc_ = pm[top_cost]["cost"]
@@ -840,7 +841,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         wr = {m: 100 * written.get(m, 0) / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
         if wr and max(wr.values()) > 0:
             w_m = max(wr, key=wr.get)
-            ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new bullets ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per bullet written.")
+            ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new learnings ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per learning written.")
         fast = max((m for m in ml if tps_med.get(m)), key=lambda m: tps_med[m], default=None)
         if fast: ins.append(f"Fastest model: <b>{esc(fast)}</b> at {tps_med[fast]:.0f} output tok/s (median turn).")
     if cot_rows:
@@ -853,10 +854,10 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             for m in weak:
                 ss_ = round(100 * ms[m] / max(1, ma[m])) if ma[m] else 0
                 ins.append(f"<b>{esc(m)}</b> mentions taste without reasoning about it: thinking barely changes ({eff[m]}) and only {ss_}% of its consultations change the plan.")
-    ins.append(f"{len(never)} of {len(rows)} bullets ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
+    ins.append(f"{len(never)} of {len(rows)} learnings ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
     if ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
     cur[0] = "Overview"
-    ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
+    ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
     h3("Taste flow", ov); ov.append(OV.get("sankey", "")); ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
     h3("Activity", ov)
@@ -880,7 +881,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
                           toggle([("Cost", tseries("Last 24 hours: cost per hour", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "Stacked by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
                                   ("Tokens", tseries("Last 24 hours: tokens per hour", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached vs uncached input, plus output", w=620, h=300, leg=legend(TOKC, "Token kind")))])))
     h3("Cost and speed", ov)
-    ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
+    ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
     h3("Habits", ov); ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
     h3("Sessions", ov); ov.append(OV.get("timeline", ""))
@@ -918,7 +919,7 @@ H.append("<script>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__
 H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
 H.append("<script>document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),tb=rows[0]&&rows[0].parentNode;if(!tb)return;if(!tbl._orig)tbl._orig=rows.slice();const state=th.classList.contains('desc')?'asc':th.classList.contains('asc')?'reset':'desc';tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));tbl.classList.remove('sorted');tbl.querySelectorAll('td').forEach(td=>{td.style.background='';td.classList.remove('sortcol')});if(state==='reset'){tbl._orig.forEach(r=>tb.appendChild(r));return;}th.classList.add(state);tbl.classList.add('sorted');const asc=state==='asc';const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};rows.slice().sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));const vals=rows.map(val);const nums=vals.filter(v=>typeof v==='number');const lo=Math.min(...nums),hi=Math.max(...nums);rows.forEach((r,j)=>{const td=r.children[i];if(!td)return;td.classList.add('sortcol');if(typeof vals[j]==='number'&&hi>lo)td.style.background=`color-mix(in srgb, var(--accent) ${Math.round(6+44*(vals[j]-lo)/(hi-lo))}%, transparent)`;});});</script>")
 open(OUT, "w").write("\n".join(H))
-print("wrote", OUT, "| bullets", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))
+print("wrote", OUT, "| learnings", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))
 if not A.no_open:
     try: subprocess.Popen(["xdg-open", f"file://{OUT}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception: pass
