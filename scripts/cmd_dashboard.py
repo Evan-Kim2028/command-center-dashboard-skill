@@ -339,14 +339,20 @@ def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900):
             v = d.get(sname, 0)
             if not v: continue
             x0, x1 = xs(x), xs(x + v)
-            out.append(R(x0, y + 5, x1 - x0, rh - 10, colmap[sname], f"{lab} × {sname}: {v}", cls="hb"))
+            out.append(R(x0, y + 5, x1 - x0, rh - 10, colmap[sname], "", cls="hb"))
             if x1 - x0 > 18: out.append(T((x0 + x1) / 2, y + rh / 2 + 5, v, 12, "bold", "middle", "var(--onbar)"))
             x += v
         out.append(T(xs(x) + 8, y + rh / 2 + 5, x, 12, "600", fill="var(--muted)"))
+        out.append(f"<rect class='hit' x='{L0:.0f}' y='{y:.0f}' width='{w - L0 - 40:.0f}' height='{rh:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/>")
     out.append(L(L0, top - 8, L0, top + rh * len(rowsx))); out.append(L(L0, top + rh * len(rowsx), w - 40, top + rh * len(rowsx)))
     out.append(T((L0 + w - 40) / 2, h - 12, xlabel, 13, "bold", "middle")); out.append(T(14, (top + rh * len(rowsx)) / 2, ylabel, 13, "bold", "middle", rot=True))
     return "".join(out) + "</svg>"
 
+def _tipdata(lab, d, series, colmap):
+    tot = sum(d.get(k, 0) for k in series)
+    rows_ = "".join(f"<div><span class=dot style='background:{colmap[k]}'></span>{esc(k)}<b>{(fmt(d[k]) if isinstance(d[k], int) or float(d[k]).is_integer() else f'{d[k]:.2f}'.rstrip('0').rstrip('.'))}</b></div>" for k in series if d.get(k))
+    tt = (fmt(tot) if isinstance(tot, int) or float(tot).is_integer() else f"{tot:.2f}".rstrip("0").rstrip("."))
+    return html.escape(f"<div class=tt-h>{esc(lab)}</div>{rows_}<div class=tt-t>total<b>{tt}</b></div>", quote=True)
 def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=360):
     """cats: [(label, {series: value})] vertical stacked columns"""
     L0, top, B = 70, 70, 70; mx = max([sum(d.values()) for _, d in cats] + [0]) or 1
@@ -360,7 +366,8 @@ def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=36
         for sname in series:
             v = d.get(sname, 0)
             if not v: continue
-            out.append(R(x, ys(acc + v), cw * 0.7, ys(acc) - ys(acc + v), colmap[sname], f"{lab} · {sname}: {v}", cls="vb")); acc += v
+            out.append(R(x, ys(acc + v), cw * 0.7, ys(acc) - ys(acc + v), colmap[sname], "", cls="vb")); acc += v
+        out.append(f"<rect class='hit' x='{L0 + k * cw:.0f}' y='{top - 6:.0f}' width='{cw:.0f}' height='{h - B - top + 6:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/>")
         if len(cats) > 8: out.append(f"<text x='{x + cw * 0.35:.0f}' y='{h - B + 8:.0f}' text-anchor='end' fill='var(--fg)' style='font-size:10px' transform='rotate(-45 {x + cw * 0.35:.0f} {h - B + 8:.0f})'>{esc(lab)}</text>")
         else: out.append(T(x + cw * 0.35, h - B + 16, lab, 11, anchor="middle"))
     out.append(L(L0, top - 6, L0, h - B)); out.append(L(L0, h - B, w - 30, h - B))
@@ -435,11 +442,14 @@ ul{padding-left:18px}li{margin:3px 0}
 .filters{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}.filters label{font-size:12px;color:var(--muted)}.filters select,.filters input{margin-left:6px;background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;min-height:32px}.pager{display:flex;gap:12px;align-items:center;margin:4px 0 16px}.pager button{background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 12px;cursor:pointer;min-height:32px}.pager button:disabled{opacity:.4;cursor:default}
 table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted td{color:var(--muted)}table.sorted td.sortcol{color:var(--fg);font-weight:600}table.sorted th.asc,table.sorted th.desc{color:var(--accent)}th.asc::after{content:' ▲';font-size:9px}th.desc::after{content:' ▼';font-size:9px}
 .tgwrap{position:relative}.seg.mini{position:absolute;right:10px;top:8px;z-index:3;padding:2px}.tgwrap .tgwrap .seg.mini{top:38px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
+.tt{position:fixed;z-index:50;pointer-events:none;opacity:0;background:var(--surface2);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:var(--edge),var(--lift);min-width:160px;transition-property:opacity;transition-duration:.12s}.tt .dot{margin-right:6px}.tt div{display:flex;justify-content:space-between;gap:14px}.tt b{margin-left:auto}.tt .tt-h{font-weight:600;margin-bottom:4px;color:var(--fg)}.tt .tt-t{border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--muted)}
+rect.hit{pointer-events:all}
+.reveal{opacity:0;translate:0 12px;transition-property:opacity,translate;transition-duration:.55s;transition-timing-function:cubic-bezier(.2,0,0,1)}.reveal.seen{opacity:1;translate:0 0}
 /* motion: staggered entrance when a tab activates, bars grow in; skipped on first paint and under reduced motion */
 @keyframes rise{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}@keyframes growx{from{transform:scaleX(0)}to{transform:scaleX(1)}}@keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 .tab.on.anim>*{animation:rise .42s cubic-bezier(.2,0,0,1) both}.tab.on.anim>*:nth-child(2){animation-delay:60ms}.tab.on.anim>*:nth-child(3){animation-delay:120ms}.tab.on.anim>*:nth-child(4){animation-delay:180ms}.tab.on.anim>*:nth-child(5){animation-delay:240ms}.tab.on.anim>*:nth-child(n+6){animation-delay:300ms}
 .tab.on.anim rect.hb{transform-box:fill-box;transform-origin:left center;animation:growx .6s cubic-bezier(.2,0,0,1) both;animation-delay:.15s}.tab.on.anim rect.vb{transform-box:fill-box;transform-origin:center bottom;animation:growy .6s cubic-bezier(.2,0,0,1) both;animation-delay:.15s}
-@media(prefers-reduced-motion:reduce){.tab.on.anim>*,.tab.on.anim rect.hb,.tab.on.anim rect.vb{animation:none}button:active{scale:1}}
+@media(prefers-reduced-motion:reduce){.tab.on.anim>*,.tab.on.anim rect.hb,.tab.on.anim rect.vb{animation:none}button:active{scale:1}.reveal{opacity:1;translate:0 0;transition:none}}
 </style>"""]
 
 ROWS_ALL = rows
@@ -890,6 +900,9 @@ for k, lab, rv, sv, av, cut_, gran_ in views:
 H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('.tabbtns button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>{t.classList.remove('on','anim')});const tt=v.querySelector('#tab-'+b.dataset.tab);tt.classList.add('on');if(window.__painted){tt.classList.add('anim');}bar.querySelectorAll('.subnav').forEach(sn=>sn.classList.toggle('on',sn.dataset.for===b.dataset.tab));window.cmdtab=i;};});bs[0].click();});</script>")
 H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x.dataset.v===k));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabbtns button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
+H.append("<div id=tt class=tt></div>")
+H.append("<script>(function(){const tt=document.getElementById('tt');let cur=null;document.addEventListener('mousemove',e=>{const r=e.target.closest('rect.hit');if(!r){if(cur){cur=null;tt.style.opacity=0;}return;}if(r!==cur){cur=r;tt.innerHTML=r.dataset.tip;tt.style.opacity=1;}const x=e.clientX+14,y=e.clientY+14;const bw=tt.offsetWidth,bh=tt.offsetHeight;tt.style.left=(x+bw>innerWidth-8?e.clientX-bw-14:x)+'px';tt.style.top=(y+bh>innerHeight-8?e.clientY-bh-14:y)+'px';});})();</script>")
+H.append("<script>(function(){if(matchMedia('(prefers-reduced-motion: reduce)').matches){document.querySelectorAll('.reveal').forEach(el=>el.classList.add('seen'));return;}const io=new IntersectionObserver(es=>{es.forEach(en=>{if(en.isIntersecting){en.target.classList.add('seen');io.unobserve(en.target);}});},{rootMargin:'0px 0px -8% 0px',threshold:0.08});document.querySelectorAll('.chart,.kpi,.card,table,.legend').forEach(el=>{el.classList.add('reveal');io.observe(el);});setTimeout(()=>document.querySelectorAll('.reveal:not(.seen)').forEach(el=>{const r=el.getBoundingClientRect();if(r.top<innerHeight*1.2)el.classList.add('seen');}),1200);})();</script>")
 H.append("<script>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__painted=true;}));</script>")
 H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
 H.append("<script>document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),tb=rows[0]&&rows[0].parentNode;if(!tb)return;if(!tbl._orig)tbl._orig=rows.slice();const state=th.classList.contains('desc')?'asc':th.classList.contains('asc')?'reset':'desc';tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));tbl.classList.remove('sorted');tbl.querySelectorAll('td').forEach(td=>{td.style.background='';td.classList.remove('sortcol')});if(state==='reset'){tbl._orig.forEach(r=>tb.appendChild(r));return;}th.classList.add(state);tbl.classList.add('sorted');const asc=state==='asc';const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};rows.slice().sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));const vals=rows.map(val);const nums=vals.filter(v=>typeof v==='number');const lo=Math.min(...nums),hi=Math.max(...nums);rows.forEach((r,j)=>{const td=r.children[i];if(!td)return;td.classList.add('sortcol');if(typeof vals[j]==='number'&&hi>lo)td.style.background=`color-mix(in srgb, var(--accent) ${Math.round(6+44*(vals[j]-lo)/(hi-lo))}%, transparent)`;});});</script>")

@@ -89,6 +89,8 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - Pair charts in `two(...)` by similar row count; cells stretch to equal height with the SVG anchored top-left.
 - Labels truncate to the label column with the full text in a hover `<title>`.
 - Surfaces: layered inset edge + soft lift shadows instead of hard borders, a top gloss gradient, concentric radii (cards 14px, charts 16px, controls 10/7px), frosted sticky header (`backdrop-filter`).
+- Stacked charts carry one transparent hit rect per bar with the whole breakdown (`data-tip`), shown in a single floating tooltip; segments have no per-slice titles.
+- Cards, charts, tables and legends fade in as they scroll into view (IntersectionObserver, with a 1.2 s fallback so nothing stays hidden).
 - Motion: staggered rise-in of a tab's sections and grow-in of bars only when a tab is activated after first paint (never on page load); buttons scale to 0.96 on press; only specific properties transition; everything is disabled under `prefers-reduced-motion`.
 - Every KPI gets a plain-English tooltip; no unexplained jargon on the page. KPIs are not repeated across tabs.
 - Sorting a table column highlights that column with a value gradient and dims the rest; the third click restores the original order and clears the highlight.
