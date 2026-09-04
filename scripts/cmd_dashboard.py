@@ -324,8 +324,9 @@ def hbars(title, items, xlabel, sub=None, w=900, color="var(--bar)", ylabel=None
         lab = full if len(full) <= maxc else full[:maxc - 1] + "…"
         lt = T(L0 - 10, y + rh / 2 + 5, lab, 13, "600", "end")
         if hov or lab != full: lt = lt.replace(">" + esc(lab) + "</text>", f"><title>{esc(hov or full)}</title>{esc(lab)}</text>")
-        out.append(lt); out.append(R(xs(0), y + 5, xs(v) - xs(0), rh - 10, color, hov or lab, cls="hb"))
+        out.append(lt); out.append("<g class='bar'>"); out.append(R(xs(0), y + 5, xs(v) - xs(0), rh - 10, color, hov or lab, cls="hb"))
         out.append(T(xs(v) + 8, y + rh / 2 + 5, fmt(v) if isinstance(v, int) or float(v).is_integer() else f"{v:.2f}".rstrip("0").rstrip("."), 12, "600", fill="var(--muted)"))
+        out.append(f"<rect class='hit' x='{L0:.0f}' y='{y:.0f}' width='{w - L0 - 60:.0f}' height='{rh:.0f}' fill='transparent' data-tip=\"{html.escape(f'<div class=tt-h>{esc(full)}</div><div>{esc(xlabel)}<b>{fmt(v) if isinstance(v, int) or float(v).is_integer() else v}</b></div>' + (f'<div class=tt-t>{esc(hov)}</div>' if hov else ''), quote=True)}\"/></g>")
     out.append(L(L0, top - 6, L0, top + rh * len(items))); out.append(L(L0, top + rh * len(items), w - 60, top + rh * len(items)))
     out.append(T((L0 + w - 60) / 2, h - 12, xlabel, 13, "bold", "middle"))
     if ylabel: out.append(T(14, (top + rh * len(items)) / 2, ylabel, 13, "bold", "middle", rot=True))
@@ -343,6 +344,7 @@ def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900, uni
         y = top + k * rh; x = 0
         maxc = max(6, int((L0 - 34) / 7.2)); full = str(lab); lab = full if len(full) <= maxc else full[:maxc - 1] + "…"
         out.append(T(L0 - 10, y + rh / 2 + 5, lab, 13, "600", "end").replace(">" + esc(lab) + "</text>", f"><title>{esc(full)}</title>{esc(lab)}</text>"))
+        out.append("<g class='bar'>")
         for sname in series:
             v = d.get(sname, 0)
             if not v: continue
@@ -351,7 +353,7 @@ def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900, uni
             if x1 - x0 > 18: out.append(T((x0 + x1) / 2, y + rh / 2 + 5, f"{v}{unit}", 12, "bold", "middle", "var(--onbar)"))
             x += v
         if total: out.append(T(xs(x) + 8, y + rh / 2 + 5, x, 12, "600", fill="var(--muted)"))
-        out.append(f"<rect class='hit' x='{L0:.0f}' y='{y:.0f}' width='{w - L0 - 40:.0f}' height='{rh:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/>")
+        out.append(f"<rect class='hit' x='{L0:.0f}' y='{y:.0f}' width='{w - L0 - 40:.0f}' height='{rh:.0f}' fill='transparent' data-tip=\"{_tipdata(full, d, series, colmap)}\"/></g>")
     out.append(L(L0, top - 8, L0, top + rh * len(rowsx))); out.append(L(L0, top + rh * len(rowsx), w - 40, top + rh * len(rowsx)))
     out.append(T((L0 + w - 40) / 2, h - 12, xlabel, 13, "bold", "middle")); out.append(T(14, (top + rh * len(rowsx)) / 2, ylabel, 13, "bold", "middle", rot=True))
     return "".join(out) + "</svg>"
@@ -371,11 +373,12 @@ def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=36
         out.append(L(L0, ys(v), w - 30, ys(v), "var(--grid)", 1)); out.append(T(L0 - 8, ys(v) + 4, (f"{v:.2f}".rstrip("0").rstrip(".") if mx < 6 else fmt(v)), 12, anchor="end"))
     for k, (lab, d) in enumerate(cats):
         x = L0 + k * cw + cw * 0.15; acc = 0
+        out.append("<g class='bar'>")
         for sname in series:
             v = d.get(sname, 0)
             if not v: continue
             out.append(R(x, ys(acc + v), cw * 0.7, ys(acc) - ys(acc + v), colmap[sname], "", cls="vb")); acc += v
-        out.append(f"<rect class='hit' x='{L0 + k * cw:.0f}' y='{top - 6:.0f}' width='{cw:.0f}' height='{h - B - top + 6:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/>")
+        out.append(f"<rect class='hit' x='{L0 + k * cw:.0f}' y='{top - 6:.0f}' width='{cw:.0f}' height='{h - B - top + 6:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/></g>")
         if len(cats) > 8: out.append(f"<text x='{x + cw * 0.35:.0f}' y='{h - B + 8:.0f}' text-anchor='end' fill='var(--fg)' style='font-size:10px' transform='rotate(-45 {x + cw * 0.35:.0f} {h - B + 8:.0f})'>{esc(lab)}</text>")
         else: out.append(T(x + cw * 0.35, h - B + 16, lab, 11, anchor="middle"))
     out.append(L(L0, top - 6, L0, h - B)); out.append(L(L0, h - B, w - 30, h - B))
@@ -421,8 +424,8 @@ H = ["""<!doctype html><html lang="en" data-theme="dark"><meta charset=utf-8><me
 [data-theme=dark]{--bg:#0b0e13;--surface:#12161d;--surface2:#181d26;--border:rgba(255,255,255,.08);--fg:#e8ebf0;--muted:#8b93a3;--grid:rgba(255,255,255,.07);--axis:rgba(255,255,255,.35);--bar:#c9d1dc;--bar2:#4a5262;--onbar:#0b0e13;--accent:#5b9cf6;--accent-fg:#0b0e13;--shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.35)}
 [data-theme=light]{--bg:#f6f7f9;--surface:#ffffff;--surface2:#f1f3f6;--border:rgba(15,23,42,.10);--fg:#0f172a;--muted:#5b6472;--grid:rgba(15,23,42,.07);--axis:rgba(15,23,42,.45);--bar:#1f2937;--bar2:#b9c0cc;--onbar:#ffffff;--accent:#2563eb;--accent-fg:#fff;--shadow:0 1px 2px rgba(15,23,42,.06)}
 *{box-sizing:border-box}html{background:var(--bg)}body{font:14px/1.5 var(--font);color:var(--fg);background:var(--bg);max-width:1240px;margin:0 auto;padding:28px 24px 80px;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;text-wrap:pretty}
-[data-theme=dark]{--glass:rgba(11,14,19,.72);--gloss:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,0) 38%);--edge:0 0 0 1px rgba(255,255,255,.06) inset,0 1px 0 rgba(255,255,255,.05) inset;--lift:0 10px 30px -12px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.25)}
-[data-theme=light]{--glass:rgba(246,247,249,.78);--gloss:linear-gradient(180deg,rgba(255,255,255,.9),rgba(255,255,255,0) 40%);--edge:0 0 0 1px rgba(15,23,42,.08) inset,0 1px 0 rgba(255,255,255,.8) inset;--lift:0 10px 28px -14px rgba(15,23,42,.25),0 1px 3px rgba(15,23,42,.06)}
+[data-theme=dark]{--glass:rgba(11,14,19,.72);--gloss:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 38%);--edge:0 0 0 1px rgba(255,255,255,.11),0 1px 0 rgba(255,255,255,.09) inset;--lift:0 18px 40px -18px rgba(0,0,0,.85),0 6px 14px -6px rgba(0,0,0,.5),0 1px 2px rgba(0,0,0,.4);--lift-hover:0 24px 48px -18px rgba(0,0,0,.9),0 10px 20px -8px rgba(0,0,0,.55)}
+[data-theme=light]{--glass:rgba(246,247,249,.78);--gloss:linear-gradient(180deg,rgba(255,255,255,.95),rgba(255,255,255,0) 40%);--edge:0 0 0 1px rgba(15,23,42,.13),0 1px 0 rgba(255,255,255,.9) inset;--lift:0 16px 36px -18px rgba(15,23,42,.35),0 6px 14px -8px rgba(15,23,42,.14),0 1px 2px rgba(15,23,42,.08);--lift-hover:0 22px 44px -18px rgba(15,23,42,.4),0 10px 20px -8px rgba(15,23,42,.18)}
 a{color:var(--accent)}code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:6px}
 h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 4px;text-wrap:balance}h2{font-size:16px;margin:32px 0 10px}h3{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:30px 0 10px;scroll-margin-top:118px}
 .sub{color:var(--muted);font-size:13px;margin:0 0 16px}.muted{color:var(--muted)}
@@ -433,9 +436,9 @@ button{font:inherit}button:active{scale:.96}button{transition-property:backgroun
 .tabs .tabbtns button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;border-radius:8px 8px 0 0;min-height:40px}.tabs .tabbtns button:hover{color:var(--fg);background:var(--surface2)}.tabs .tabbtns button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
 .subnav{display:none;gap:4px;flex-wrap:wrap;padding:6px 0 8px;border-top:1px solid var(--border)}.subnav.on{display:flex}.subnav a{font-size:12px;color:var(--muted);text-decoration:none;padding:4px 11px;border-radius:999px;transition-property:background-color,color;transition-duration:.15s;min-height:26px}.subnav a:hover{color:var(--fg);background:var(--surface)}
 .tab{display:none}.tab.on{display:block}.tabdesc{color:var(--muted);margin:14px 0 18px;font-size:14px}
-.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:0 0 16px}.kpi div{background:var(--surface);background-image:var(--gloss);border-radius:14px;padding:14px 16px;box-shadow:var(--edge),var(--lift);font-size:12px;color:var(--muted);letter-spacing:.02em;transition-property:translate,box-shadow;transition-duration:.2s;transition-timing-function:cubic-bezier(.2,0,0,1)}.kpi div:hover{translate:0 -2px}.kpi b{display:block;font-size:22px;font-weight:600;color:var(--fg);letter-spacing:-.01em;margin-bottom:2px}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:0 0 16px}.kpi div{background:var(--surface);background-image:var(--gloss);border-radius:14px;padding:14px 16px;box-shadow:var(--edge),var(--lift);font-size:12px;color:var(--muted);letter-spacing:.02em;transition-property:translate,box-shadow;transition-duration:.2s;transition-timing-function:cubic-bezier(.2,0,0,1)}.kpi div:hover{translate:0 -2px;box-shadow:var(--edge),var(--lift-hover)}.kpi b{display:block;font-size:22px;font-weight:600;color:var(--fg);letter-spacing:-.01em;margin-bottom:2px}
 .card{background:var(--surface);background-image:var(--gloss);border-left:3px solid var(--accent);border-radius:14px;padding:12px 16px;margin:0 0 16px;color:var(--fg);box-shadow:var(--edge),var(--lift)}
-.chart{background:var(--surface);background-image:var(--gloss);border-radius:16px;box-shadow:var(--edge),var(--lift);margin:12px 0;display:block;width:100%}svg text{font-family:var(--font)}
+.chart{background:var(--surface);background-image:var(--gloss);border-radius:16px;box-shadow:var(--edge),var(--lift);margin:12px 0;display:block;width:100%;transition-property:box-shadow;transition-duration:.25s}.chart:hover{box-shadow:var(--edge),var(--lift-hover)}svg text{font-family:var(--font)}
 .flex{display:flex;gap:16px;align-items:flex-start}.legend{flex:0 0 220px;background:var(--surface);background-image:var(--gloss);border-radius:16px;padding:12px 14px;font-size:13px;margin-top:12px;box-shadow:var(--edge),var(--lift)}.legend b{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase}.legend div{margin:8px 0}
 .dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:6px;vertical-align:middle;box-shadow:0 0 0 1px rgba(0,0,0,.15) inset}
 table{border-collapse:separate;border-spacing:0;width:100%;margin:8px 0 16px;background:var(--surface);background-image:var(--gloss);border-radius:14px;overflow:hidden;font-size:13px;box-shadow:var(--edge),var(--lift)}th{background:var(--surface2);color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.05em;text-transform:uppercase;text-align:left;padding:9px 10px;border-bottom:1px solid var(--border)}td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top;transition-property:background-color;transition-duration:.12s}tr:last-child td{border-bottom:0}tr:hover td{background:var(--surface2)}.num{text-align:right}
@@ -452,6 +455,8 @@ table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted 
 .tgwrap{position:relative}.tgwrap>.tgpane>.chart,.tgwrap>.tgpane>.flex>.chart{margin-top:12px}.seg.mini{position:absolute;right:14px;top:22px;z-index:3;padding:2px}.tgwrap .tgwrap .seg.mini{top:54px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
 .tt{position:fixed;z-index:50;pointer-events:none;opacity:0;background:var(--surface2);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:var(--edge),var(--lift);min-width:160px;transition-property:opacity;transition-duration:.12s}.tt .dot{margin-right:6px}.tt div{display:flex;justify-content:space-between;gap:14px}.tt b{margin-left:auto}.tt .tt-h{font-weight:600;margin-bottom:4px;color:var(--fg)}.tt .tt-t{border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--muted)}
 rect.hit{pointer-events:all}
+g.bar rect.hb,g.bar rect.vb{transition-property:transform,opacity,filter;transition-duration:.22s;transition-timing-function:cubic-bezier(.2,0,0,1);transform-box:fill-box}g.bar rect.hb{transform-origin:left center}g.bar rect.vb{transform-origin:center bottom}
+svg.attn g.bar:not(.hot) rect{opacity:.38}svg.attn g.bar:not(.hot) text{opacity:.5}g.bar.hot rect.hb{transform:scaleY(1.18) scaleX(1.01);filter:brightness(1.18) saturate(1.15)}g.bar.hot rect.vb{transform:scaleY(1.04) scaleX(1.08);filter:brightness(1.18) saturate(1.15)}g.bar.hot text{font-weight:700;opacity:1}g.bar text{transition-property:opacity;transition-duration:.2s}
 .reveal{opacity:0;translate:0 12px;transition-property:opacity,translate;transition-duration:.55s;transition-timing-function:cubic-bezier(.2,0,0,1)}.reveal.seen{opacity:1;translate:0 0}
 /* motion: staggered entrance when a tab activates, bars grow in; skipped on first paint and under reduced motion */
 @keyframes rise{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}@keyframes growx{from{transform:scaleX(0)}to{transform:scaleX(1)}}@keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
@@ -705,6 +710,24 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             yr += hh2
         return "".join(out) + "</svg>"
     if src_in and cons: OV["sankey"] = sankey(src_in, cons); H.append(OV["sankey"])
+    # do models prefer the learnings they created?
+    pool = collections.Counter(r["src"] for r in ROWS_ALL); pool_total = sum(pool.values()) or 1
+    self_rows = []; self_pairs = []
+    for m in ml:
+        a_m = [a for a in acts if a["model"] == m]
+        if len(a_m) < 5: continue
+        own = sum(1 for a in a_m if ROWS_ALL[a["b"]]["src"] == f"cmd · {m}"); other = len(a_m) - own
+        own_pct = 100 * own / len(a_m); expect = 100 * pool.get(f"cmd · {m}", 0) / pool_total
+        bias = (own_pct / expect) if expect > 0 else None
+        self_rows.append((m, len(a_m), pool.get(f"cmd · {m}", 0), round(expect, 1), own, round(own_pct, 1), (round(bias, 1) if bias is not None else "—")))
+        self_pairs.append((m, {"its own learnings": round(own_pct), "others' learnings": round(100 - own_pct)}))
+    if self_pairs:
+        sc_cols = {"its own learnings": "var(--accent)", "others' learnings": "var(--bar2)"}
+        OV["self"] = two(flex(stacked_h("What each model consults: its own learnings vs the pool", self_pairs, list(sc_cols), sc_cols, "Share of the model's consultations", "Model", "Blue: learnings this model's sessions created. Grey: learnings from other models, Claude Code or Cursor.", w=620, unit="%", total=False), legend(sc_cols, "Consulted")),
+                     hbars("Self-preference", [(m, r[6], f"{r[5]}% of its consultations hit its own learnings; its learnings are {r[3]}% of the file") for m, r in zip([r[0] for r in self_rows], self_rows) if isinstance(r[6], float)], "Own-learning share ÷ own share of the file", "1.0 = uses the pool without bias. Above 1 = leans on what it wrote itself.", ylabel="Model", lw=230, w=620))
+        H.append(OV["self"])
+        H.append(table(["Model", "#Consultations", "#Learnings it created", "#Its share of the file %", "#Consultations of its own", "#Own share of its consultations %", "#Self-preference ×"], self_rows))
+        H.append("<p class=charttip>If a model consulted learnings at random from the file, its own-learning share would equal its share of the file. Self-preference above 1 means it gravitates to what it wrote; below 1 means it leans on others' learnings.</p>")
     elif cons: OV["sankey"] = "<p class=muted>No learnings were learned in this range, so the taste-flow diagram has no input side. Widen the range to see it.</p>"; H.append(OV["sankey"])
     tw_pairs = []
     W_all = sum(written.values()) or 1; U_all = sum(ma.values()) or 1
@@ -844,6 +867,10 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new learnings ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per learning written.")
         fast = max((m for m in ml if tps_med.get(m)), key=lambda m: tps_med[m], default=None)
         if fast: ins.append(f"Fastest model: <b>{esc(fast)}</b> at {tps_med[fast]:.0f} output tok/s (median turn).")
+    sb = [(r[0], r[6], r[5], r[3]) for r in self_rows if isinstance(r[6], float)] if 'self_rows' in dir() else []
+    if sb:
+        top_sb = max(sb, key=lambda x: x[1]); lo_sb = min(sb, key=lambda x: x[1])
+        ins.append(f"Models favour their own learnings: <b>{esc(top_sb[0])}</b> sends {top_sb[2]:.0f}% of its consultations to learnings it created, {top_sb[1]:.1f}× what a random pick from the file would give" + (f"; the least self-referential is <b>{esc(lo_sb[0])}</b> at {lo_sb[1]:.1f}×." if lo_sb[0] != top_sb[0] else "."))
     if cot_rows:
         eff = {r[0]: r[7] for r in cot_rows if isinstance(r[7], str) and r[7].endswith("%")}
         effv = {m: int(v.rstrip("%")) for m, v in eff.items()}
@@ -859,7 +886,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     cur[0] = "Overview"
     ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
-    h3("Taste flow", ov); ov.append(OV.get("sankey", "")); ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
+    h3("Taste flow", ov); ov.append(OV.get("sankey", "")); ov.append(two(OV.get("twoway", ""), OV.get("work", ""))); ov.append(OV.get("self", ""))
     h3("Activity", ov)
     th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
     ch_ = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
@@ -913,7 +940,7 @@ H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...
 H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x.dataset.v===k));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabbtns button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
 H.append("<div id=tt class=tt></div>")
-H.append("<script>(function(){const tt=document.getElementById('tt');let cur=null;document.addEventListener('mousemove',e=>{const r=e.target.closest('rect.hit');if(!r){if(cur){cur=null;tt.style.opacity=0;}return;}if(r!==cur){cur=r;tt.innerHTML=r.dataset.tip;tt.style.opacity=1;}const x=e.clientX+14,y=e.clientY+14;const bw=tt.offsetWidth,bh=tt.offsetHeight;tt.style.left=(x+bw>innerWidth-8?e.clientX-bw-14:x)+'px';tt.style.top=(y+bh>innerHeight-8?e.clientY-bh-14:y)+'px';});})();</script>")
+H.append("<script>(function(){const tt=document.getElementById('tt');let cur=null;document.addEventListener('mousemove',e=>{const r=e.target.closest('rect.hit');if(!r){if(cur){cur.closest('g.bar')?.classList.remove('hot');cur.closest('svg')?.classList.remove('attn');cur=null;tt.style.opacity=0;}return;}if(r!==cur){if(cur){cur.closest('g.bar')?.classList.remove('hot');}cur=r;const g=r.closest('g.bar'),sv=r.closest('svg');if(g)g.classList.add('hot');if(sv)sv.classList.add('attn');tt.innerHTML=r.dataset.tip;tt.style.opacity=1;}const x=e.clientX+14,y=e.clientY+14;const bw=tt.offsetWidth,bh=tt.offsetHeight;tt.style.left=(x+bw>innerWidth-8?e.clientX-bw-14:x)+'px';tt.style.top=(y+bh>innerHeight-8?e.clientY-bh-14:y)+'px';});})();</script>")
 H.append("<script>(function(){if(matchMedia('(prefers-reduced-motion: reduce)').matches||location.hash.includes('nomotion')){document.querySelectorAll('.reveal').forEach(el=>el.classList.add('seen'));return;}const io=new IntersectionObserver(es=>{es.forEach(en=>{if(en.isIntersecting){en.target.classList.add('seen');io.unobserve(en.target);}});},{rootMargin:'0px 0px -8% 0px',threshold:0.08});document.querySelectorAll('.chart,.kpi,.card,table,.legend').forEach(el=>{el.classList.add('reveal');io.observe(el);});setTimeout(()=>document.querySelectorAll('.reveal:not(.seen)').forEach(el=>{const r=el.getBoundingClientRect();if(r.top<innerHeight*1.2)el.classList.add('seen');}),1200);})();</script>")
 H.append("<script>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__painted=true;}));</script>")
 H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
