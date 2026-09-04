@@ -512,6 +512,21 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     OV["speed"] = hbars("Output speed by model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Wall-clock speed you experienced, median turn", ylabel="Model", lw=230, w=620)
     OV["cost"] = hbars("Cost by model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)
     OV["model"] = hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620)
+    # ---- two-way influence: model -> harness (bullets written) vs harness -> model (activations) ----
+    written = collections.Counter()
+    for r in ROWS_ALL:
+        if r["src"].startswith("cmd · "): written[r["src"][6:]] += 1
+    tw_rows = []
+    for m in ml:
+        t_ = pm[m]["asst"]; w_ = written.get(m, 0); a_ = ma[m]
+        tw_rows.append((m, t_, w_, round(100 * w_ / max(1, t_), 2), a_, round(100 * a_ / max(1, t_), 1), round(100 * ms[m] / max(1, a_)), round(a_ / max(1, w_), 1) if w_ else "—"))
+    h3("Two-way influence: model ↔ taste")
+    H.append("<p class=charttip>Model → taste: bullets the learner wrote from that model's sessions (a harness update). Taste → model: how often that model's reasoning consulted a bullet. Bullets are attributed to the whole file, activations to the selected range.</p>")
+    H.append(table(["Model", "#Turns", "#Bullets written", "#Written per 100 turns", "#Activations", "#Activations per 100 turns", "#Steering share %", "#Activations per bullet written"], tw_rows))
+    tw_pairs = [(m, {"written / 100 turns": round(100 * written.get(m, 0) / max(1, pm[m]["asst"]), 1), "consulted / 100 turns": round(100 * ma[m] / max(1, pm[m]["asst"]), 1)}) for m in ml]
+    tw_cols = {"written / 100 turns": "var(--accent)", "consulted / 100 turns": "var(--bar)"}
+    OV["twoway"] = flex(stacked_h("Model → taste vs taste → model", [(m, {k: v for k, v in d.items()}) for m, d in tw_pairs], list(tw_cols), tw_cols, "Per 100 assistant turns", "Model", "Blue = bullets the model's sessions produced. Grey = times the model consulted taste.", w=620), legend(tw_cols, "Direction"))
+    H.append(OV["twoway"])
     H.append(two(hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620),
                  hbars("Thinking volume per turn, by model", [(m, round(pm[m]["think"] / max(1, pm[m]["asst"])), "") for m in ml], "Thinking characters per assistant turn", "Models that think more have more room to consult taste", ylabel="Model", lw=230, w=620)))
     weeks = collections.OrderedDict()
@@ -602,7 +617,7 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "What the provider billed in this range. Free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste bullet."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused bullets", len(never), "Bullets injected into every prompt but never consulted in this range.")]))
     ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
-    ov.append(two(OV.get("model", ""), OV.get("work", "")))
+    ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
     ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
     ov.append(OV.get("timeline", ""))
     ov.append("</div>")
