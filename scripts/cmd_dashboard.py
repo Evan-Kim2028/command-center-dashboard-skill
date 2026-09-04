@@ -402,7 +402,8 @@ h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 4px}h2{font-s
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:8px 0 4px}
 .tgwrap{position:relative}.seg.mini{position:absolute;right:12px;top:22px;z-index:3;padding:1px}.seg.mini button{padding:3px 9px;font-size:12px}
 .seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:2px}.seg button{border:0;background:transparent;color:var(--muted);padding:6px 12px;border-radius:6px;font:inherit;font-size:13px;cursor:pointer}.seg button.on{background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
-.tabs{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border);box-shadow:0 8px 16px -12px rgba(0,0,0,.6)}.tabbtns{display:flex;gap:2px}.ctl{display:flex;gap:8px;align-items:center;padding-bottom:8px}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tabs{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border);box-shadow:0 8px 16px -12px rgba(0,0,0,.6)}.tabrow{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}.tabbtns{display:flex;gap:2px}
+.subnav{display:none;gap:4px;flex-wrap:wrap;padding:6px 0 8px;border-top:1px solid var(--border)}.subnav.on{display:flex}.subnav a{font-size:12px;color:var(--muted);text-decoration:none;padding:3px 10px;border-radius:999px;border:1px solid transparent}.subnav a:hover{color:var(--fg);border-color:var(--border);background:var(--surface)}h3{scroll-margin-top:110px}.ctl{display:flex;gap:8px;align-items:center;padding-bottom:8px}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
 .tab{display:none}.tab.on{display:block}.tabdesc{color:var(--muted);margin:14px 0 18px;font-size:14px}
 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:0 0 16px}.kpi div{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow)}.kpi div{font-size:12px;color:var(--muted);letter-spacing:.02em}.kpi b{display:block;font-size:22px;font-weight:600;color:var(--fg);letter-spacing:-.01em;margin-bottom:2px}
 .card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0 0 16px;color:var(--fg)}
@@ -509,7 +510,10 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         if cur[0]: H.append("</div>")
         cur[0] = name; desc = dict(TABS)[name]
         H.append(f"<div class=tab id='tab-{name}{SUF}'><p class=tabdesc>{esc(desc)}.</p>")
-    def h3(t): H.append(f"<h3>{esc(t)}</h3>")
+    SECS = collections.OrderedDict(); _sec = [0]
+    def sec_id(t): _sec[0] += 1; return f"s{_sec[0]}{SUF}"
+    def h3(t, target=None):
+        i = sec_id(t); (target if target is not None else H).append(f"<h3 id='{i}'>{esc(t)}</h3>"); SECS.setdefault(cur[0] or "Overview", []).append((i, t))
     tot_cost = sum(s["cost"] for s in sessions); tot_in = sum(s["inp"] for s in sessions); tot_cr = sum(s["cr"] for s in sessions); tot_out = sum(s["out"] for s in sessions)
     est_tokens = len(raw) // 4; TOK_NOTE = "estimated as bytes ÷ 4, about ±20%"
     latest_in = next((s["first_in"] for s in reversed(sessions) if s["first_in"]), 1)
@@ -807,7 +811,11 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
                 ins.append(f"<b>{esc(m)}</b> mentions taste without reasoning about it: thinking barely changes ({eff[m]}) and only {ss_}% of its consultations change the plan.")
     ins.append(f"{len(never)} of {len(rows)} bullets ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
     if ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
+    cur[0] = "Overview"
+    ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
+    h3("Taste flow", ov); ov.append(OV.get("sankey", "")); ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
+    h3("Activity", ov)
     th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
     ch_ = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
     TOKC = {"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}; TOKS = list(TOKC)
@@ -827,15 +835,15 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             ov.append(two(flex(stacked_v("Last 24 hours: assistant turns per hour", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300), legend(ALL_MCOLS, "Model")),
                           toggle([("Cost", flex(stacked_v("Last 24 hours: cost per hour", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "Stacked by model", w=620, h=300), legend(ALL_MCOLS, "Model"))),
                                   ("Tokens", flex(stacked_v("Last 24 hours: tokens per hour", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached vs uncached input, plus output", w=620, h=300), legend(TOKC, "Token kind")))])))
-    ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
+    h3("Cost and speed", ov)
+    ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
-    ov.append(OV.get("sankey", ""))
-    ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
-    ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
-    ov.append(OV.get("timeline", ""))
+    h3("Habits", ov); ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
+    h3("Sessions", ov); ov.append(OV.get("timeline", ""))
     ov.append("</div>")
     H[0:0] = ov
-    H.insert(0, "<div class=tabs><div class=tabbtns>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>" + CTL + "</div>")
+    subnav = "".join(f"<div class=subnav data-for='{n}{SUF}'>" + "".join(f"<a href='#{i}'>{esc(t)}</a>" for i, t in SECS.get(n, [])) + "</div>" for n, _ in TABS)
+    H.insert(0, "<div class=tabs><div class=tabrow><div class=tabbtns>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>" + CTL + "</div>" + subnav + "</div>")
 
     return H
 
@@ -856,7 +864,7 @@ for k, lab, rv, sv, av, cut_, gran_ in views:
     if rv and sv: H += build("-" + k, rv, sv, av, [r for r in rows if r["date"] >= cut_[:10]], gran=gran_, cut=cut_)
     else: H.append(f"<p class=muted style='padding:24px 0'>No cmd sessions in this range. Pick a wider range above.</p>")
     H.append("</div>")
-H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('.tabbtns button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
+H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('.tabbtns button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');bar.querySelectorAll('.subnav').forEach(sn=>sn.classList.toggle('on',sn.dataset.for===b.dataset.tab));window.cmdtab=i;};});bs[0].click();});</script>")
 H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x.dataset.v===k));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabbtns button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
 H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
