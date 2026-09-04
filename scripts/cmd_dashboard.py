@@ -252,13 +252,20 @@ n_filehist = len(glob.glob(f"{CC_HOME}/file-history/*/*"))
 cand = []
 for i in cfg.get("learnedSessions", {}).get("claude-code", []):
     cand += glob.glob(f"{HOME}/.claude/projects/*/{i}.jsonl")
+for i in cfg.get("learnedSessions", {}).get("cursor", []):
+    cand += glob.glob(f"{HOME}/.cursor/projects/*/agent-transcripts/{i}/{i}.jsonl")
+_MON = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 cand += [f for f in glob.glob(f"{SESS}/*.jsonl") if not f.endswith("checkpoints.jsonl")]
 docs = {}
 for f in cand:
     try: txt = open(f, errors="ignore").read().lower()
     except Exception: continue
     m = re.search(r'"timestamp":"(\d{4}-\d{2}-\d{2})', txt)
-    docs[f] = (m.group(1) if m else datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat(), set(WORD.findall(txt)))
+    if m: d_ = m.group(1)
+    else:
+        mc = re.search(r"<timestamp>\w+, (\w{3}) (\d{1,2}), (\d{4})", txt, re.I)  # Cursor transcripts stamp turns in prose
+        d_ = f"{mc.group(3)}-{_MON.get(mc.group(1).title(), 1):02d}-{int(mc.group(2)):02d}" if mc and mc.group(1).title() in _MON else datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat()
+    docs[f] = (d_, set(WORD.findall(txt)))
 df = collections.Counter(w for _, (_, ws) in docs.items() for w in ws); N = max(1, len(docs))
 for k, r in enumerate(rows):
     rare = {t for t in btoks[k] if df.get(t) and df[t] <= max(3, 0.3 * N)}
@@ -272,12 +279,13 @@ for k, r in enumerate(rows):
     if ok:
         bf = best[2]
         if "/.claude/" in bf: r["src"] = "Claude Code"
+        elif "/.cursor/" in bf: r["src"] = "Cursor"
         else:
             mf = bf.replace(".jsonl", ".meta.json"); mm = json.load(open(mf)).get("model") if os.path.exists(mf) else None
             if not mm:
                 mm_ = re.search(r'"model":"([^"]+)"', open(bf, errors="ignore").read()); mm = mm_.group(1) if mm_ else "?"
             r["src"] = f"cmd · {mm}"
-    else: r["src"] = "unmatched (Cursor or unreadable)"
+    else: r["src"] = "unmatched"
 idx_d = [k for k, r in enumerate(rows) if r["date"]]
 for k, r in enumerate(rows):
     if r["date"] or not idx_d: continue
@@ -569,12 +577,12 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     OV["habits"] = flex(stacked_h("Work habits by work area", [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl], dl, cols, "Number of bullets", "Work habit", "Whole taste file. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc))
     h3("Where the bullets came from")
     srcs = collections.Counter(r["src"] for r in rows_r); sl = [k for k, _ in srcs.most_common()]
-    scols = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else {"Claude Code": "hsl(210 10% 62%)"}.get(k, "hsl(210 8% 40%)")) for k in sl}
+    scols = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else {"Claude Code": "hsl(210 10% 62%)", "Cursor": "hsl(40 8% 58%)"}.get(k, "hsl(210 8% 40%)")) for k in sl}
     weeks_b = collections.OrderedDict()
     for r in sorted(rows_r, key=lambda r: r["date"]):
         wk = (datetime.date.fromisoformat(r["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(r["date"]).weekday())).isoformat()
         weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
-    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no readable transcript matched: Cursor stores sessions in a database the script does not read, some sessions were deleted or compacted, and some bullets were paraphrased so far that no distinctive words remain.</p>")
+    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no transcript on disk shared enough distinctive words: the source session was deleted or compacted, or the learner paraphrased the bullet beyond recognition.</p>")
     if rows_r: H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
                  tseries("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380, leg=legend(scols, "Source", srcs))))
     h3("All bullets")
@@ -677,7 +685,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         out.append(T(Lx, top - 30, "IN · bullets created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} bullets learned in this range, by the session that taught them", 11, fill="var(--muted)"))
         out.append(T(Rx, top - 30, "OUT · bullets consulted", 13, "bold", "end")); out.append(T(Rx, top - 14, f"{tot_out} consultations in this range, by the model that used them", 11, fill="var(--muted)", anchor="end"))
         out.append(T(18, top + H_ / 2, "Source of bullets", 12, "bold", "middle", rot=True)); out.append(T(w - 14, top + H_ / 2, "Model using bullets", 12, "bold", "middle", rot=True))
-        neutral = {"Claude Code": "hsl(210 10% 62%)", "unmatched (Cursor or unreadable)": "hsl(210 8% 40%)"}
+        neutral = {"Claude Code": "hsl(210 10% 62%)", "Cursor": "hsl(40 8% 58%)", "unmatched": "hsl(210 8% 40%)"}
         scol = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else neutral.get(k, "var(--muted)")) for k in src_in}
         out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} bullets in, {sum(cons.values())} consultations out", 0.9))
         out.append(T(Mx, mid_y - 10, "taste.md", 12, "bold", "middle"))

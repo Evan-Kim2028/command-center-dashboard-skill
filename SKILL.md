@@ -46,6 +46,7 @@ If the user asks for a shareable version, use `--public` and remind them to revi
 | Session meta | `*.meta.json` | session title and model |
 | Learn ledger | `~/.commandcode/projects/<slug>/config.json` | which Claude Code / Cursor sessions taste was mined from |
 | Claude Code transcripts | `~/.claude/projects/*/<id>.jsonl` (only the ids in the ledger) | dating each bullet and naming its source |
+| Cursor transcripts | `~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl` (ledger ids; turn dates parsed from the `<timestamp>` prose) | same |
 | Redaction rules | `<project>/.commandcode/redact.json` or `~/.commandcode/redact.json` (optional) | `--public` builds |
 
 `<slug>` is the project path lower-cased with non-alphanumerics replaced by `-` (what cmd itself uses).
@@ -101,7 +102,7 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - New model ids need nothing; they are read from each message.
 - To add a work area or habit, edit `DOMAINS` / `TRAITS` (label, description, regex) near the top of the script.
 - To redact project-specific names for a public build, write `~/.commandcode/redact.json` as `[["regex", "replacement"], ...]`. The username and home path are always redacted.
-- Cursor transcripts are a sqlite store the script does not read; bullets learned there appear as "unmatched".
+- Bullets that match no transcript on disk appear as "unmatched" (source deleted/compacted, or paraphrased beyond recognition).
 
 ## Verify
 
