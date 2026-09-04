@@ -494,7 +494,7 @@ ul{padding-left:18px}li{margin:3px 0}
 .tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:8px;box-shadow:var(--edge);color:var(--muted);font-size:10px;margin-left:6px;cursor:help;position:relative;vertical-align:middle}.tip::after{content:attr(data-tip);position:absolute;left:50%;bottom:22px;transform:translateX(-50%) translateY(4px);width:280px;background:var(--surface2);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.4;font-weight:400;text-align:left;white-space:normal;z-index:20;box-shadow:var(--edge),var(--lift);opacity:0;pointer-events:none;transition-property:opacity,transform;transition-duration:.16s;transition-timing-function:cubic-bezier(.2,0,0,1)}.tip:hover::after,.tip:focus::after{opacity:1;transform:translateX(-50%) translateY(0)}.kpi div .tip{float:right}.charttip{margin:-6px 0 10px;font-size:12.5px;color:var(--muted)}
 .filters{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}.filters label{font-size:12px;color:var(--muted)}.filters select,.filters input{margin-left:6px;background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;min-height:32px}.pager{display:flex;gap:12px;align-items:center;margin:4px 0 16px}.pager button{background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 12px;cursor:pointer;min-height:32px}.pager button:disabled{opacity:.4;cursor:default}
 table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted td{color:var(--muted2)}table.sorted td.sortcol{color:var(--fg);font-weight:600}table.sorted th.asc,table.sorted th.desc{color:var(--accent)}th.asc::after{content:' ▲';font-size:9px}th.desc::after{content:' ▼';font-size:9px}
-.tgwrap{position:relative}.tgwrap>.tgpane>.chart,.tgwrap>.tgpane>.flex>.chart{margin-top:12px}.seg.mini{position:absolute;right:14px;top:22px;z-index:3;padding:2px}.tgwrap .tgwrap .seg.mini{top:54px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
+.tgwrap{position:relative}.tgwrap>.tgpane>.chart,.tgwrap>.tgpane>.flex>.chart{margin-top:12px}.seg.mini{position:absolute;right:14px;top:22px;z-index:3;padding:2px}.tgwrap .tgwrap .seg.mini{top:22px;right:148px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
 .tt{position:fixed;z-index:50;pointer-events:none;opacity:0;background:var(--surface2);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:var(--edge),var(--lift);min-width:160px;transition-property:opacity;transition-duration:.12s}.tt .dot{margin-right:6px}.tt div{display:flex;justify-content:space-between;gap:14px}.tt b{margin-left:auto}.tt .tt-h{font-weight:600;margin-bottom:4px;color:var(--fg)}.tt .tt-t{border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--muted)}
 rect.hit{pointer-events:all}
 g.bar rect.hb,g.bar rect.vb{transition-property:transform,opacity,filter;transition-duration:.22s;transition-timing-function:cubic-bezier(.2,0,0,1);transform-box:fill-box}g.bar rect.hb{transform-origin:left center}g.bar rect.vb{transform-origin:center bottom}
@@ -698,7 +698,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     H.append(two(hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620),
                  hbars("Output Tokens per Turn by Model", [(m, round(pm[m]["out"] / max(1, pm[m]["asst"])), "") for m in ml], "Output tokens per assistant turn", "Mean output tokens per assistant turn, reasoning included", ylabel="Model", lw=230, w=620)))
     OV["speed"] = hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620)
-    OV["cost"] = hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)
+    OV["cost"] = hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Catalog prices · free tiers $0", ylabel="Model", lw=230, w=620)
     OV["model"] = hbars("Taste Activations per 100 Turns by Model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "Consultations per 100 assistant turns", ylabel="Model", lw=230, w=620)
     # ---- two-way influence: model -> harness (bullets written) vs harness -> model (activations) ----
     written = collections.Counter()
@@ -809,7 +809,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         wk = (datetime.date.fromisoformat(s["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(s["date"]).weekday())).isoformat()
         weeks.setdefault(wk, collections.Counter()).update(s["models"])
     H.append(two(tseries("Assistant Turns per Week by Model", [(wk[5:], dict(c)) for wk, c in weeks.items()], ml, mcols, "Week starting", "Assistant turns", w=620, h=380, leg=legend(mcols, "Model")),
-                 hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)))
+                 hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Catalog prices · free tiers $0", ylabel="Model", lw=230, w=620)))
 
     # ================= USAGE =================
     tab("Usage")
@@ -938,10 +938,11 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     ch_ = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
     TOKC = {"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}; TOKS = list(TOKC)
     def tok_items(src):
-        return [dict(_s="cached input", _v=t["cr"], ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="uncached input", _v=max(0, t["inp"] - t["cr"]), ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="output", _v=t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
+        return [dict(_s=t["model"], _v=t["inp"] + t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
+    cache_share = 100 * tot_cr / max(1, tot_in)
     tk_ = by_hour(tok_items(sessions), lambda a: a["ts"][:19])
     cost_pane = tseries(f"Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · catalog prices · free tiers $0", w=620, h=320, leg=legend(mcols, "Model"))
-    tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], TOKS, TOKC, BUCKET_WORD.capitalize(), "Tokens", "Cached input, uncached input and output", w=620, h=320, leg=legend(TOKC, "Token kind"))
+    tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Tokens", f"Input + output by model · {cache_share:.0f}% of input served from cache", w=620, h=320, leg=legend(mcols, "Model"))
     ov.append(two(tseries(f"Assistant Turns {PER.title()}", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
                   toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
     if gran != "hour":
@@ -952,7 +953,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
             ov.append(two(tseries("Assistant Turns per Hour, Last 24 Hours", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300, leg=legend(ALL_MCOLS, "Model")),
                           toggle([("Cost", tseries("Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
-                                  ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached input, uncached input and output", w=620, h=300, leg=legend(TOKC, "Token kind")))])))
+                                  ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Tokens", "Input + output by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model")))])))
     h3("Cost and speed", ov)
     ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
