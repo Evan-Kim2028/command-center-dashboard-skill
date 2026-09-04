@@ -20,6 +20,12 @@ Command Code:
 git clone https://github.com/Evan-Kim2028/command-center-dashboard-skill ~/.commandcode/skills/command-center-dashboard
 ```
 
+Fresh machine with nothing installed? One line fetches just the script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Evan-Kim2028/command-center-dashboard-skill/main/scripts/cmd_dashboard.py -o cmd_dashboard.py && python3 cmd_dashboard.py
+```
+
 Then ask your agent for "the cmd dashboard", or run it directly:
 
 ```bash

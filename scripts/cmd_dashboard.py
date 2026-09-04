@@ -411,27 +411,47 @@ table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted 
 </style>"""]
 
 ROWS_ALL = rows
+ALL_SESSIONS = sessions
+_pm_all = collections.Counter()
+for s_ in sessions: _pm_all.update(s_["models"])
+ALL_MODELS = [m for m, _ in _pm_all.most_common()]
+_PAL = ["#3ecf8e", "#5b9cf6", "#f5a524", "#ef6b6b", "#a78bfa", "#e879a8", "#22c9d6", "#c8d64b", "#9aa3b2"]
+ALL_MCOLS = {m: _PAL[i % len(_PAL)] for i, m in enumerate(ALL_MODELS)}
 def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     rows_r = rows if rows_r is None else rows_r
     def _local(ts):
         try: return datetime.datetime.fromisoformat(ts.rstrip("Z")).replace(tzinfo=datetime.timezone.utc).astimezone()
         except Exception: return None
-    def hour_buckets():
-        end = datetime.datetime.now().replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+    # time buckets adapt to the range: 24h -> 1h, 7d -> 6h, 30d -> 1 day, all -> 1 week (local time)
+    SIZE_H = {"hour": 1, "6h": 6, "day": 24, "week": 168}[gran]
+    BUCKET_WORD = {"hour": "hour", "6h": "6 hours", "day": "day", "week": "week"}[gran]
+    def hour_buckets(size_h=None, n=None):
+        size_h = size_h or SIZE_H
+        now_l = datetime.datetime.now()
+        if size_h == 1: end = now_l.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1); n = n or 24
+        elif size_h == 6: end = now_l.replace(hour=(now_l.hour // 6) * 6, minute=0, second=0, microsecond=0) + datetime.timedelta(hours=6); n = n or 28
+        elif size_h == 24: end = now_l.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1); n = n or 30
+        else:
+            end = (now_l.replace(hour=0, minute=0, second=0, microsecond=0) - datetime.timedelta(days=now_l.weekday())) + datetime.timedelta(days=7)
+            first_d = datetime.date.fromisoformat(min(s_["date"] for s_ in sessions)) if sessions else now_l.date()
+            n = n or max(2, math.ceil(((end.date() - first_d).days) / 7))
         out = []
-        for i in range(24, 0, -1):
-            st = end - datetime.timedelta(hours=i); out.append((st.strftime("%H:00"), st.astimezone(datetime.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")))
+        for i in range(n, 0, -1):
+            st = end - datetime.timedelta(hours=size_h * i)
+            lbl = st.strftime("%H:00") if size_h == 1 else (st.strftime("%a %H:00") if size_h == 6 else (st.strftime("%b %d") if size_h == 24 else "wk " + st.strftime("%b %d")))
+            out.append((lbl, st.astimezone(datetime.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")))
         return out
-    def by_hour(items, key):
-        B = hour_buckets(); lbls = [b[0] for b in B]; starts = [b[1] for b in B]
+    def by_hour(items, key, size_h=None, n=None):
+        B = hour_buckets(size_h, n); lbls = [b[0] for b in B]; starts = [b[1] for b in B]
         res = collections.OrderedDict((l, collections.Counter()) for l in lbls)
         for it in items:
             t = key(it)
             if not t: continue
             idx = bisect.bisect_right(starts, t) - 1
-            if 0 <= idx < 24: res[lbls[idx]][it.get("_s", "n")] += it.get("_v", 1)
+            if 0 <= idx < len(lbls): res[lbls[idx]][it.get("_s", "n")] += it.get("_v", 1)
         return res
-    last_ts = max([t["ts"] for s_ in sessions for t in s_["turns"]] + ["0"])
+    PER = f"per {BUCKET_WORD}"
+    last_ts = max([t["ts"] for s_ in ALL_SESSIONS for t in s_["turns"]] + ["0"])
     last_local = _local(last_ts) if last_ts != "0" else None
     ago_min = round((datetime.datetime.now(datetime.timezone.utc) - last_local).total_seconds() / 60) if last_local else None
     H = []
@@ -470,7 +490,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     pm = collections.defaultdict(collections.Counter)
     for s in sessions:
         for m, c in s["pm"].items(): pm[m].update(c)
-    ml = sorted(pm, key=lambda m: -pm[m]["asst"]); mcols = {m: PAL[i % len(PAL)] for i, m in enumerate(ml)}
+    ml = sorted(pm, key=lambda m: -pm[m]["asst"]); mcols = {m: ALL_MCOLS.get(m, PAL[i % len(PAL)]) for i, m in enumerate(ml)}
 
     # ================= TASTE =================
     tab("Taste")
@@ -524,10 +544,10 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     top_b = sorted(rows, key=lambda r: -r["acts"])[:15]
     c3 = hbars("Most activated bullets", [(f"#{r['i']} " + r["text"][:28] + "…", r["acts"], r["text"]) for r in top_b], "Activations", "Hover a bar for the full bullet", ylabel="Bullet", lw=260, w=620)
     days = sorted(set(a["date"] for a in acts))
-    if gran == "hour":
+    if True:
         hb_ = by_hour([dict(_s="steering" if a["steer"] else "mention", ts=a["ts"]) for a in acts], lambda a: a["ts"][:19])
-        c4 = stacked_v("Activations per hour (last 24h, local)", [(l, dict(c)) for l, c in hb_.items()], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Hour", "Activations", w=620, h=520)
-    else: c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
+        c4 = stacked_v(f"Activations {PER} (local time)", [(l, dict(c)) for l, c in hb_.items()], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, BUCKET_WORD.capitalize(), "Activations", w=620, h=520)
+    if False: c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
     H.append(two(c3, c4))
     pc = sum(s["push_after_cite"] for s in sessions); pn = sum(s["push_after_nocite"] for s in sessions); tcn = sum(s["turns_cite"] for s in sessions); tnn = sum(s["turns_nocite"] for s in sessions)
     h3("Does the user push back less after taste-guided turns?")
@@ -574,6 +594,39 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     H.append(table(["Model", "#Turns", "#New bullets created", "#Created per 100 turns", "#Times taste used", "#Used per 100 turns", "#Uses that changed the plan %", "#Taste traffic per 100 turns", "#Share of traffic that is use %"], tw_rows))
     H.append("<p class=charttip><b>Taste traffic</b> = created + used, per 100 turns: how much this model interacts with taste at all. <b>Share that is use</b>: 0% = the model only creates bullets, 100% = it only uses them, 50% = balanced.</p>")
     bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
+    # sankey: where taste comes from and who uses it
+    src_in = collections.Counter(r["src"] for r in ROWS_ALL); cons = collections.Counter(a["model"] for a in acts)
+    def sankey(src_in, cons, w=1240, h=460):
+        Lx, Rx, Mx, nw, gap, top, bot = 20, w - 20, w / 2, 14, 10, 60, 30
+        H_ = h - top - bot
+        def layout(counter, x):
+            tot = sum(counter.values()) or 1; y = top; nodes = {}
+            usable = H_ - gap * (len(counter) - 1)
+            for k, v in counter.most_common():
+                hh = usable * v / tot; nodes[k] = (x, y, hh, v); y += hh + gap
+            return nodes
+        Ln = layout(src_in, Lx); Rn = layout(cons, Rx - nw)
+        mid_h = H_ * 0.9; mid_y = top + (H_ - mid_h) / 2
+        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Left: sessions the learner mined to write bullets (whole file). Right: models whose reasoning consulted bullets in this range. Band width = share.")]
+        scol = {k: PAL[i % len(PAL)] for i, k in enumerate(src_in)}
+        out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} bullets in, {sum(cons.values())} consultations out", 0.9))
+        out.append(T(Mx, mid_y - 10, "taste.md", 12, "bold", "middle"))
+        yl = mid_y
+        for k, (x, y, hh, v) in Ln.items():
+            hh2 = mid_h * v / max(1, sum(src_in.values()))
+            out.append(R(x, y, nw, hh, scol[k], f"{k}: {v} bullets", 0.95))
+            out.append(f"<path d='M{x+nw:.0f},{y:.0f} C{(x+nw+Mx)/2:.0f},{y:.0f} {(x+nw+Mx)/2:.0f},{yl:.0f} {Mx-nw/2:.0f},{yl:.0f} L{Mx-nw/2:.0f},{yl+hh2:.0f} C{(x+nw+Mx)/2:.0f},{yl+hh2:.0f} {(x+nw+Mx)/2:.0f},{y+hh:.0f} {x+nw:.0f},{y+hh:.0f} Z' fill='{scol[k]}' opacity='0.35'><title>{esc(k)} → taste.md: {v} bullets</title></path>")
+            out.append(T(x + nw + 8, y + hh / 2 + 4, f"{k} ({v})", 12, "600"))
+            yl += hh2
+        yr = mid_y
+        for k, (x, y, hh, v) in Rn.items():
+            hh2 = mid_h * v / max(1, sum(cons.values()))
+            out.append(R(x, y, nw, hh, mcols.get(k, "var(--muted)"), f"{k}: {v} consultations", 0.95))
+            out.append(f"<path d='M{Mx+nw/2:.0f},{yr:.0f} C{(Mx+x)/2:.0f},{yr:.0f} {(Mx+x)/2:.0f},{y:.0f} {x:.0f},{y:.0f} L{x:.0f},{y+hh:.0f} C{(Mx+x)/2:.0f},{y+hh:.0f} {(Mx+x)/2:.0f},{yr+hh2:.0f} {Mx+nw/2:.0f},{yr+hh2:.0f} Z' fill='{mcols.get(k, "var(--muted)")}' opacity='0.35'><title>taste.md → {esc(k)}: {v} consultations</title></path>")
+            out.append(T(x - 8, y + hh / 2 + 4, f"{k} ({v})", 12, "600", "end"))
+            yr += hh2
+        return "".join(out) + "</svg>"
+    if src_in and cons: OV["sankey"] = sankey(src_in, cons); H.append(OV["sankey"])
     H.append(two(hbars("Share of taste traffic that is use", bal_items, "Uses ÷ (created + used), %", "0 = only creates bullets · 50 = balanced · 100 = only uses them", ylabel="Model", lw=230, w=620),
                  hbars("Taste traffic by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Created + used, per 100 turns", "How much the model interacts with taste at all", ylabel="Model", lw=230, w=620)))
     # ---- chain of thought per model, and whether taste changes it ----
@@ -617,28 +670,20 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     # session timeline: x = date, y = assistant turns, bubble = minutes, color = model
     TW, TH, TL, TB, TR = 1240, 380, 70, 60, 30; mxt = max(s["asst"] for s in sessions) or 1
     ty = lambda v: TH - TB - v / mxt * (TH - TB - 60)
-    if gran == "hour":
-        t_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
-        tx = lambda ts_: TL + 20 + max(0.0, min(1.0, ((_local(ts_) or t_start) - t_start).total_seconds() / 86400)) * (TW - TL - TR - 40)
-        sub_t = "Last 24 hours, local time. Each bubble is a session at its first message; height = assistant turns, size = minutes, color = model."
-    else:
-        sd0 = datetime.date.fromisoformat(sessions[0]["date"]); sd1 = datetime.date.fromisoformat(sessions[-1]["date"]); sspan = max(1, (sd1 - sd0).days)
-        tx = lambda ts_: TL + 20 + (datetime.date.fromisoformat(ts_[:10]) - sd0).days / sspan * (TW - TL - TR - 40)
-        sub_t = "Each bubble is a session. Height = assistant turns, size = minutes, color = model. Hover for details."
+    HB = hour_buckets(); t0_utc = datetime.datetime.fromisoformat(HB[0][1]); t1_utc = datetime.datetime.fromisoformat(HB[-1][1]) + datetime.timedelta(hours=SIZE_H); tspan = max(1, (t1_utc - t0_utc).total_seconds())
+    def tx(ts_):
+        try: tt = datetime.datetime.fromisoformat(ts_.rstrip("Z"))
+        except Exception: tt = t0_utc
+        return TL + 20 + max(0.0, min(1.0, (tt - t0_utc).total_seconds() / tspan)) * (TW - TL - TR - 40)
+    sub_t = f"Each bubble is a session at its first message. Height = assistant turns, size = minutes, color = model. Axis in local time, one tick per {BUCKET_WORD}."
     out = [svg_open(TW, TH), title_block(TW, "Session timeline", sub_t)]
     for v in range(0, mxt + 1, max(1, math.ceil(mxt / 5))): out.append(L(TL, ty(v), TW - TR, ty(v), "var(--grid)", 1)); out.append(T(TL - 8, ty(v) + 4, fmt(v), anchor="end"))
-    if gran == "hour":
-        for i, (lbl, st_) in enumerate(hour_buckets()):
-            if i % 3: continue
-            px = TL + 20 + i / 24 * (TW - TL - TR - 40); out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, lbl, anchor="middle"))
-    else:
-        d = sd0 - datetime.timedelta(days=sd0.weekday())
-        while d <= sd1 + datetime.timedelta(days=7):
-            px = tx(d.isoformat())
-            if TL <= px <= TW - TR: out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, d.strftime("%b %d"), anchor="middle"))
-            d += datetime.timedelta(days=7)
+    step_ = max(1, math.ceil(len(HB) / 10))
+    for i, (lbl, st_) in enumerate(HB):
+        if i % step_: continue
+        px = TL + 20 + i / len(HB) * (TW - TL - TR - 40); out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, lbl, anchor="middle"))
     out.append(L(TL, 50, TL, TH - TB)); out.append(L(TL, TH - TB, TW - TR, TH - TB))
-    out.append(T((TL + TW - TR) / 2, TH - 12, "Time (local)" if gran == "hour" else "Date", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
+    out.append(T((TL + TW - TR) / 2, TH - 12, "Time (local)", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
     for s in sorted(sessions, key=lambda s: -s["minutes"]):
         r = 4 + math.sqrt(max(1, s["minutes"])) * 0.55
         out.append(f"<circle cx='{tx(s['first']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {s['cites']} taste activations</title></circle>")
@@ -665,18 +710,15 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             else: opens[" ".join(re.findall(r"[a-z']+", t.lower())[:2])][mdl_s] += 1
             L_ = len(t); plens[("1000+" if L_ >= 1000 else f"{L_//100*100}–{L_//100*100+99}")][mdl_s] += 1
     mleg = legend(mcols, "Model")
-    hour_chart = flex(stacked_h("Prompts by hour (UTC)", [(f"{h:02d}:00", dict(hours[h])) for h in range(24) if hours.get(h)], ml, mcols, "Prompts", "Hour", "Stacked by the model the session was running", w=620), mleg)
+    hour_chart = flex(stacked_h("Prompts by time of day (UTC)", [(f"{h:02d}:00", dict(hours[h])) for h in range(24) if hours.get(h)], ml, mcols, "Prompts", "Hour", "Stacked by the model the session was running", w=620), mleg)
     wday_chart = flex(stacked_h("Prompts by weekday", [(w, dict(wdays[w])) for w in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] if wdays.get(w)], ml, mcols, "Prompts", "Day", "Stacked by model", w=620), mleg)
     top_open = sorted(opens, key=lambda o: -sum(opens[o].values()))[:12]
     open_chart = flex(stacked_h("How prompts open (first two words)", [(o, dict(opens[o])) for o in top_open], ml, mcols, "Prompts", "Opening", f"{slash} prompts were slash commands · stacked by model", w=620), mleg)
     len_keys = sorted(plens, key=lambda k: 10**6 if k == "1000+" else int(k.split("–")[0]))
     len_chart = flex(stacked_h("Prompt length", [(k, dict(plens[k])) for k in len_keys], ml, mcols, "Prompts", "Characters", "Stacked by model", w=620), mleg)
-    if gran == "hour":
-        ph = by_hour([dict(_s=s_["model"], ts=p[0]) for s_ in sessions for p in s_["prompts"] if p[1].strip()], lambda a: a["ts"][:19])
-        act_chart = flex(stacked_v("Prompts per hour (last 24h, local)", [(l, dict(c)) for l, c in ph.items()], ml, mcols, "Hour", "Prompts", w=620, h=300), legend(mcols, "Model"))
-    else: act_chart = stacked_v("Prompts per week", [(wk[5:], {"prompts": c["prompts"]}) for wk, c in weeks_u.items()], ["prompts"], {"prompts": "var(--bar)"}, "Week starting", "Prompts", w=620, h=300)
-    H.append(two(act_chart, tools_chart)); H.append(two(open_chart, len_chart))
-    if gran != "hour": H.append(two(hour_chart, wday_chart))
+    ph = by_hour([dict(_s=s_["model"], ts=p[0]) for s_ in sessions for p in s_["prompts"] if p[1].strip()], lambda a: a["ts"][:19])
+    act_chart = flex(stacked_v(f"Prompts {PER} (local time)", [(l, dict(c)) for l, c in ph.items()], ml, mcols, BUCKET_WORD.capitalize(), "Prompts", w=620, h=300), legend(mcols, "Model"))
+    H.append(two(act_chart, tools_chart)); H.append(two(open_chart, len_chart)); H.append(two(hour_chart, wday_chart))
 
     # ================= HEALTH =================
     tab("Health")
@@ -719,16 +761,33 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new bullets ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per bullet written.")
         fast = max((m for m in ml if tps_med.get(m)), key=lambda m: tps_med[m], default=None)
         if fast: ins.append(f"Fastest model: <b>{esc(fast)}</b> at {tps_med[fast]:.0f} output tok/s (median turn).")
+    if cot_rows:
+        eff = {r[0]: r[7] for r in cot_rows if isinstance(r[7], str) and r[7].endswith("%")}
+        effv = {m: int(v.rstrip("%")) for m, v in eff.items()}
+        if effv:
+            strong = [m for m, v in effv.items() if v >= 50]; weak = [m for m, v in effv.items() if v < 20]
+            lo_eff, hi_eff = min(effv.values()), max(effv.values())
+            if strong: ins.append(f"Taste is not a shortcut: on {len(strong)} of {len(effv)} models a taste-consulting turn carries {min(effv[m] for m in strong)//100+1}× to {max(effv[m] for m in strong)//100+1}× the reasoning of that model's other thinking turns. Caveat: taste tends to be consulted on harder, planning-type turns, which would run longer anyway.")
+            for m in weak:
+                ss_ = round(100 * ms[m] / max(1, ma[m])) if ma[m] else 0
+                ins.append(f"<b>{esc(m)}</b> mentions taste without reasoning about it: thinking barely changes ({eff[m]}) and only {ss_}% of its consultations change the plan.")
     ins.append(f"{len(never)} of {len(rows)} bullets ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
-    if gran == "hour" and ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
+    if ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
-    if gran == "hour":
-        th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
-        ch_ = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
-        ov.append(two(flex(stacked_v("Assistant turns per hour (last 24h, local)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, "Hour", "Turns", w=620, h=320), legend(mcols, "Model")),
-                      stacked_v("Cost per hour (last 24h, local)", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch_.items()], ["cost"], {"cost": "var(--accent)"}, "Hour", "USD", w=620, h=320)))
+    th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+    ch_ = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+    ov.append(two(flex(stacked_v(f"Assistant turns {PER} (local time)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320), legend(mcols, "Model")),
+                  stacked_v(f"Cost {PER} (local time)", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch_.items()], ["cost"], {"cost": "var(--accent)"}, BUCKET_WORD.capitalize(), "USD", w=620, h=320)))
+    if gran != "hour":
+        # keep the live feel: last 24 hours by hour, from the unclipped sessions
+        th24 = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
+        ch24 = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
+        if any(sum(c.values()) for c in th24.values()):
+            ov.append(two(flex(stacked_v("Last 24 hours: assistant turns per hour", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300), legend(ALL_MCOLS, "Model")),
+                          stacked_v("Last 24 hours: cost per hour", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch24.items()], ["cost"], {"cost": "var(--accent)"}, "Hour", "USD", w=620, h=300)))
     ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
+    ov.append(OV.get("sankey", ""))
     ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
     ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
     ov.append(OV.get("timeline", ""))
@@ -745,7 +804,7 @@ views = []
 for k, lab, hours in RANGES:
     c = _cut_ts(hours)
     sv = [x for x in (clip_session(s_, c) for s_ in sessions) if x] if hours else sessions
-    views.append((k, lab, rows, sv, [a for a in acts if a["ts"] >= c], c, "hour" if k == "24h" else "day"))
+    views.append((k, lab, rows, sv, [a for a in acts if a["ts"] >= c], c, {"24h": "hour", "7d": "6h", "30d": "day", "all": "week"}[k]))
 DEFAULT_VIEW = next((k for k, _, _, sv, *_ in views if sv), "all")
 H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names redacted · " if PUBLIC else "") + f"Rendered {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} local · re-run the script to refresh · <code>{esc(redact(TASTE))}</code></p></div>")
 H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")

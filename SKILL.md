@@ -8,13 +8,30 @@ description: Build a self-contained HTML dashboard of everything Command Code (c
 One script turns the files Command Code already writes into a tabbed, dark-mode, single-file HTML dashboard.
 Nothing leaves the machine. No pip installs.
 
+## Where the script is
+
+`scripts/cmd_dashboard.py` sits next to this SKILL.md. Resolve it from the skill's own directory, never from the user's cwd:
+
+```bash
+SKILL_DIR="$(dirname "$(find ~/.claude/skills ~/.commandcode/skills -path '*command-center-dashboard/SKILL.md' 2>/dev/null | head -1)")"
+```
+
+If the skill directory is missing or `$SKILL_DIR/scripts/cmd_dashboard.py` is absent (fresh machine, or the skill was pasted in without its files), fetch it in one command and use that path instead:
+
+```bash
+mkdir -p ~/.claude/skills/command-center-dashboard/scripts && curl -fsSL https://raw.githubusercontent.com/Evan-Kim2028/command-center-dashboard-skill/main/scripts/cmd_dashboard.py -o ~/.claude/skills/command-center-dashboard/scripts/cmd_dashboard.py && SKILL_DIR=~/.claude/skills/command-center-dashboard
+```
+
+Or install the whole skill: `git clone https://github.com/Evan-Kim2028/command-center-dashboard-skill ~/.claude/skills/command-center-dashboard`.
+Requirements: Python 3.10+ only. No pip packages. Data comes from `~/.commandcode`, which exists on any machine that has run Command Code at least once.
+
 ## Run it
 
 ```bash
-python3 scripts/cmd_dashboard.py                     # private build for the current project, opens in browser
-python3 scripts/cmd_dashboard.py --public            # redacted build safe to share
-python3 scripts/cmd_dashboard.py --list              # show which cmd project dirs have sessions
-python3 scripts/cmd_dashboard.py --project ~/work/repo --out /tmp/dash.html --no-open
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py"                     # private build for the current project, opens in browser
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --public            # redacted build safe to share
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --list              # show which cmd project dirs have sessions
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --project ~/work/repo --out /tmp/dash.html --no-open
 ```
 
 Then tell the user the output path. Open it with `xdg-open file://<path>` (Linux) or `open <path>` (macOS).
@@ -38,14 +55,14 @@ If the current directory has no cmd sessions the script falls back to the projec
 
 Six tabs. Each answers one question; charts are not repeated across tabs.
 
-1. **Overview** (default): logged cost, input tokens, cache hit, output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused bullets. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
+1. **Overview** (default): Insights card (generated sentences: cost concentration, taste consult leaders, bullet producers, fastest model, taste's effect on reasoning with its causality caveat, models that mention taste without reasoning, unused-bullet share), then logged cost, input tokens, cache hit, output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused bullets. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
 2. **Taste**: what the file says. Bullets learned in the selected range: habits by work area, where bullets came from (Claude Code / cmd + model / unmatched), bullets learned per week by source, and a paginated bullet table with area, habit, date and text filters, sorted by date descending.
 3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per bullet, most-activated bullets, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
-4. **Models**: per-message attribution. Two-way influence table: bullets written per 100 turns (model → taste) beside activations per 100 turns (taste → model). Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
+4. **Models**: per-message attribution. Sankey of taste flow (sources → taste.md → consuming models). Two-way influence table: bullets written per 100 turns (model → taste) beside activations per 100 turns (taste → model). Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
 5. **Usage**: session timeline bubble chart, prompts per week, tool calls, and prompt openings, prompt length, prompts by hour and weekday each stacked by the model the session ran; sessions table (collapsed, sortable).
 6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, bullet length, base prompt size per session, bullets added over time, never-activated bullets, longest bullets, duplicates.
 
-Global controls: Today (trailing 24 h, hourly charts, local time) / 7 days / 30 days / All time. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
+Global controls: Today / 7 days / 30 days / All time. Time charts adapt their buckets to the range (1 h, 6 h, 1 day, 1 week, local time) and a last-24-hours hourly strip stays on Overview in every range. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
 
 ## Definitions the script uses (keep these consistent if you change anything)
 
