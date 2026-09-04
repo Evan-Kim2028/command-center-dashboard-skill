@@ -380,6 +380,16 @@ def toggle(options):
     ctl = f"<div class='seg mini' data-tg='{tid}'>" + "".join(f"<button data-i='{i}' class='{'on' if i == 0 else ''}'>{esc(l)}</button>" for i, (l, _) in enumerate(options)) + "</div>"
     body = "".join(f"<div class='tgpane' data-tg='{tid}' data-i='{i}'{'' if i == 0 else ' style=\"display:none\"'}>{h}</div>" for i, (_, h) in enumerate(options))
     return f"<div class=tgwrap>{ctl}{body}</div>"
+def cumul(cats):
+    acc = collections.Counter(); out = []
+    for lab, d in cats:
+        acc.update(d); out.append((lab, dict(acc)))
+    return out
+def tseries(title, cats, series, colmap, xlabel, ylabel, sub=None, w=620, h=320, leg=None):
+    """time series with a Per period / Cumulative switch"""
+    a = stacked_v(title, cats, series, colmap, xlabel, ylabel, sub, w=w, h=h); b = stacked_v(title, cumul(cats), series, colmap, xlabel, ylabel, "Cumulative · running total across the range", w=w, h=h)
+    if leg: a, b = flex(a, leg), flex(b, leg)
+    return toggle([("Per period", a), ("Cumulative", b)])
 def two(*items): return "<div class=two>" + "".join(f"<div class=cell>{it}</div>" for it in items) + "</div>"
 def table(headers, body_rows, cls="sortable"):
     return f"<table class='{cls}'><tr>" + "".join(f"<th{' class=num' if h.startswith('#') else ''}>{esc(h.lstrip('#'))}</th>" for h in headers) + "</tr>" + "".join("<tr>" + "".join(f"<td{' class=num' if isinstance(v,(int,float)) else ''}>{v if isinstance(v,str) and v.startswith('<') else (fmt(v) if isinstance(v,int) and abs(v) >= 1000 else esc(v))}</td>" for v in r) + "</tr>" for r in body_rows) + "</table>"
@@ -424,7 +434,7 @@ ul{padding-left:18px}li{margin:3px 0}
 .tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:8px;box-shadow:var(--edge);color:var(--muted);font-size:10px;margin-left:6px;cursor:help;position:relative;vertical-align:middle}.tip::after{content:attr(data-tip);position:absolute;left:50%;bottom:22px;transform:translateX(-50%) translateY(4px);width:280px;background:var(--surface2);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.4;font-weight:400;text-align:left;white-space:normal;z-index:20;box-shadow:var(--edge),var(--lift);opacity:0;pointer-events:none;transition-property:opacity,transform;transition-duration:.16s;transition-timing-function:cubic-bezier(.2,0,0,1)}.tip:hover::after,.tip:focus::after{opacity:1;transform:translateX(-50%) translateY(0)}.kpi div .tip{float:right}.charttip{margin:-6px 0 10px;font-size:12px;color:var(--muted)}
 .filters{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}.filters label{font-size:12px;color:var(--muted)}.filters select,.filters input{margin-left:6px;background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;min-height:32px}.pager{display:flex;gap:12px;align-items:center;margin:4px 0 16px}.pager button{background:var(--surface);color:var(--fg);border:0;box-shadow:var(--edge);border-radius:8px;padding:6px 12px;cursor:pointer;min-height:32px}.pager button:disabled{opacity:.4;cursor:default}
 table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted td{color:var(--muted)}table.sorted td.sortcol{color:var(--fg);font-weight:600}table.sorted th.asc,table.sorted th.desc{color:var(--accent)}th.asc::after{content:' ▲';font-size:9px}th.desc::after{content:' ▼';font-size:9px}
-.tgwrap{position:relative}.seg.mini{position:absolute;right:12px;top:22px;z-index:3;padding:2px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
+.tgwrap{position:relative}.seg.mini{position:absolute;right:10px;top:8px;z-index:3;padding:2px}.tgwrap .tgwrap .seg.mini{top:38px}.seg.mini button{padding:3px 9px;font-size:12px;min-height:26px}
 /* motion: staggered entrance when a tab activates, bars grow in; skipped on first paint and under reduced motion */
 @keyframes rise{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}@keyframes growx{from{transform:scaleX(0)}to{transform:scaleX(1)}}@keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 .tab.on.anim>*{animation:rise .42s cubic-bezier(.2,0,0,1) both}.tab.on.anim>*:nth-child(2){animation-delay:60ms}.tab.on.anim>*:nth-child(3){animation-delay:120ms}.tab.on.anim>*:nth-child(4){animation-delay:180ms}.tab.on.anim>*:nth-child(5){animation-delay:240ms}.tab.on.anim>*:nth-child(n+6){animation-delay:300ms}
@@ -556,7 +566,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
     H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. <b>Unmatched</b> = no readable transcript matched: Cursor stores sessions in a database the script does not read, some sessions were deleted or compacted, and some bullets were paraphrased so far that no distinctive words remain.</p>")
     if rows_r: H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
-                 flex(stacked_v("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380), legend(scols, "Source", srcs))))
+                 tseries("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380, leg=legend(scols, "Source", srcs))))
     h3("All bullets")
     H.append("<p class=muted>Activations = times matched in the model's thinking; steering = of those, changed the plan. Click a column header to sort.</p>")
     bdata = [dict(i=r["i"], area=r["domain"], habits=r["traits"], conf=r["conf"], date=r["date"], src=r["src"], acts=r["acts"], steers=r["steers"], text=r["text"]) for r in rows_r]
@@ -591,7 +601,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     days = sorted(set(a["date"] for a in acts))
     if True:
         hb_ = by_hour([dict(_s="steering" if a["steer"] else "mention", ts=a["ts"]) for a in acts], lambda a: a["ts"][:19])
-        c4 = stacked_v(f"Activations {PER} (local time)", [(l, dict(c)) for l, c in hb_.items()], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, BUCKET_WORD.capitalize(), "Activations", w=620, h=520)
+        c4 = tseries(f"Activations {PER} (local time)", [(l, dict(c)) for l, c in hb_.items()], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, BUCKET_WORD.capitalize(), "Activations", w=620, h=520)
     if False: c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
     H.append(two(c3, c4))
     pc = sum(s["push_after_cite"] for s in sessions); pn = sum(s["push_after_nocite"] for s in sessions); tcn = sum(s["turns_cite"] for s in sessions); tnn = sum(s["turns_nocite"] for s in sessions)
@@ -626,7 +636,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     OV["model"] = hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620)
     # ---- two-way influence: model -> harness (bullets written) vs harness -> model (activations) ----
     written = collections.Counter()
-    for r in ROWS_ALL:
+    for r in rows_r:
         if r["src"].startswith("cmd · "): written[r["src"][6:]] += 1
     tw_rows = []
     for m in ml:
@@ -635,12 +645,12 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         bal = round(100 * cr_ / (wr_ + cr_)) if (wr_ + cr_) > 0 else "—"
         tw_rows.append((m, t_, w_, round(wr_, 2), a_, round(cr_, 1), round(100 * ms[m] / max(1, a_)), round(wr_ + cr_, 1), bal))
     h3("Does the model teach taste, or use it?")
-    H.append("<p class=charttip>Two directions. <b>Creates</b>: new taste bullets the learner wrote from this model's sessions. <b>Uses</b>: times this model's reasoning consulted a bullet. Both are shown per 100 turns so long and short sessions compare fairly.</p>")
+    H.append("<p class=charttip>Two directions, both within the selected range. <b>Creates</b>: new taste bullets learned from this model's sessions. <b>Uses</b>: times this model's reasoning consulted a bullet. Both per 100 turns so long and short sessions compare fairly.</p>")
     H.append(table(["Model", "#Turns", "#New bullets created", "#Created per 100 turns", "#Times taste used", "#Used per 100 turns", "#Uses that changed the plan %", "#Taste traffic per 100 turns", "#Share of traffic that is use %"], tw_rows))
     H.append("<p class=charttip><b>Taste traffic</b> = created + used, per 100 turns: how much this model interacts with taste at all. <b>Share that is use</b>: 0% = the model only creates bullets, 100% = it only uses them, 50% = balanced.</p>")
     bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
     # sankey: where taste comes from and who uses it
-    src_in = collections.Counter(r["src"] for r in ROWS_ALL); cons = collections.Counter(a["model"] for a in acts)
+    src_in = collections.Counter(r["src"] for r in rows_r); cons = collections.Counter(a["model"] for a in acts)
     def sankey(src_in, cons, w=1240, h=500):
         Lx, Rx, Mx, nw, gap, top, bot = 60, w - 60, w / 2, 14, 10, 96, 30
         H_ = h - top - bot
@@ -652,9 +662,9 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             return nodes
         Ln = layout(src_in, Lx); Rn = layout(cons, Rx - nw)
         mid_h = H_ * 0.9; mid_y = top + (H_ - mid_h) / 2
-        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Each side is scaled to its own total, so widths are shares within a side, not per-turn rates. For rates per 100 turns see the chart below.")]
+        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Both sides follow the selected range. Each side is scaled to its own total, so widths are shares within a side, not per-turn rates; see the chart below for rates per 100 turns.")]
         tot_in, tot_out = sum(src_in.values()), sum(cons.values())
-        out.append(T(Lx, top - 30, "IN · bullets created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} bullets in the whole file, by the session that taught them", 11, fill="var(--muted)"))
+        out.append(T(Lx, top - 30, "IN · bullets created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} bullets learned in this range, by the session that taught them", 11, fill="var(--muted)"))
         out.append(T(Rx, top - 30, "OUT · bullets consulted", 13, "bold", "end")); out.append(T(Rx, top - 14, f"{tot_out} consultations in this range, by the model that used them", 11, fill="var(--muted)", anchor="end"))
         out.append(T(18, top + H_ / 2, "Source of bullets", 12, "bold", "middle", rot=True)); out.append(T(w - 14, top + H_ / 2, "Model using bullets", 12, "bold", "middle", rot=True))
         neutral = {"Claude Code": "hsl(210 10% 62%)", "unmatched (Cursor or unreadable)": "hsl(210 8% 40%)"}
@@ -677,6 +687,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             yr += hh2
         return "".join(out) + "</svg>"
     if src_in and cons: OV["sankey"] = sankey(src_in, cons); H.append(OV["sankey"])
+    elif cons: OV["sankey"] = "<p class=muted>No bullets were learned in this range, so the taste-flow diagram has no input side. Widen the range to see it.</p>"; H.append(OV["sankey"])
     H.append(two(hbars("Share of taste traffic that is use", bal_items, "Uses ÷ (created + used), %", "0 = only creates bullets · 50 = balanced · 100 = only uses them", ylabel="Model", lw=230, w=620),
                  hbars("Taste traffic by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Created + used, per 100 turns", "How much the model interacts with taste at all", ylabel="Model", lw=230, w=620)))
     # ---- chain of thought per model, and whether taste changes it ----
@@ -709,7 +720,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     for s in sessions:
         wk = (datetime.date.fromisoformat(s["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(s["date"]).weekday())).isoformat()
         weeks.setdefault(wk, collections.Counter()).update(s["models"])
-    H.append(two(flex(stacked_v("Assistant turns per week by model", [(wk[5:], dict(c)) for wk, c in weeks.items()], ml, mcols, "Week starting", "Assistant turns", w=620, h=380), legend(mcols, "Model")),
+    H.append(two(tseries("Assistant turns per week by model", [(wk[5:], dict(c)) for wk, c in weeks.items()], ml, mcols, "Week starting", "Assistant turns", w=620, h=380, leg=legend(mcols, "Model")),
                  hbars("Cost by model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)))
 
     # ================= USAGE =================
@@ -767,7 +778,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     len_keys = sorted(plens, key=lambda k: 10**6 if k == "1000+" else int(k.split("–")[0]))
     len_chart = flex(stacked_h("Prompt length", [(k, dict(plens[k])) for k in len_keys], ml, mcols, "Prompts", "Characters", "Stacked by model", w=620), mleg)
     ph = by_hour([dict(_s=s_["model"], ts=p[0]) for s_ in sessions for p in s_["prompts"] if p[1].strip()], lambda a: a["ts"][:19])
-    act_chart = flex(stacked_v(f"Prompts {PER} (local time)", [(l, dict(c)) for l, c in ph.items()], ml, mcols, BUCKET_WORD.capitalize(), "Prompts", w=620, h=300), legend(mcols, "Model"))
+    act_chart = tseries(f"Prompts {PER} (local time)", [(l, dict(c)) for l, c in ph.items()], ml, mcols, BUCKET_WORD.capitalize(), "Prompts", w=620, h=300, leg=legend(mcols, "Model"))
     H.append(two(act_chart, tools_chart)); H.append(two(open_chart, len_chart)); H.append(two(hour_chart, wday_chart))
 
     # ================= HEALTH =================
@@ -834,9 +845,9 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     def tok_items(src):
         return [dict(_s="cached input", _v=t["cr"], ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="uncached input", _v=max(0, t["inp"] - t["cr"]), ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="output", _v=t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
     tk_ = by_hour(tok_items(sessions), lambda a: a["ts"][:19])
-    cost_pane = flex(stacked_v(f"Cost {PER} (local time)", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "Stacked by model; free tiers add nothing", w=620, h=320), legend(mcols, "Model"))
-    tok_pane = flex(stacked_v(f"Tokens {PER} (local time)", [(l, dict(c)) for l, c in tk_.items()], TOKS, TOKC, BUCKET_WORD.capitalize(), "Tokens", "Cached input is re-read from the prompt cache and billed at a fraction of uncached", w=620, h=320), legend(TOKC, "Token kind"))
-    ov.append(two(flex(stacked_v(f"Assistant turns {PER} (local time)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320), legend(mcols, "Model")),
+    cost_pane = tseries(f"Cost {PER} (local time)", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "Stacked by model; free tiers add nothing", w=620, h=320, leg=legend(mcols, "Model"))
+    tok_pane = tseries(f"Tokens {PER} (local time)", [(l, dict(c)) for l, c in tk_.items()], TOKS, TOKC, BUCKET_WORD.capitalize(), "Tokens", "Cached input is re-read from the prompt cache and billed at a fraction of uncached", w=620, h=320, leg=legend(TOKC, "Token kind"))
+    ov.append(two(tseries(f"Assistant turns {PER} (local time)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
                   toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
     if gran != "hour":
         # keep the live feel: last 24 hours by hour, from the unclipped sessions
@@ -844,9 +855,9 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         ch24 = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
         if any(sum(c.values()) for c in th24.values()):
             tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
-            ov.append(two(flex(stacked_v("Last 24 hours: assistant turns per hour", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300), legend(ALL_MCOLS, "Model")),
-                          toggle([("Cost", flex(stacked_v("Last 24 hours: cost per hour", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "Stacked by model", w=620, h=300), legend(ALL_MCOLS, "Model"))),
-                                  ("Tokens", flex(stacked_v("Last 24 hours: tokens per hour", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached vs uncached input, plus output", w=620, h=300), legend(TOKC, "Token kind")))])))
+            ov.append(two(tseries("Last 24 hours: assistant turns per hour", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300, leg=legend(ALL_MCOLS, "Model")),
+                          toggle([("Cost", tseries("Last 24 hours: cost per hour", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "Stacked by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
+                                  ("Tokens", tseries("Last 24 hours: tokens per hour", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached vs uncached input, plus output", w=620, h=300, leg=legend(TOKC, "Token kind")))])))
     h3("Cost and speed", ov)
     ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
