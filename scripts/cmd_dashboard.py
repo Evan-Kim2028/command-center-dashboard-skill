@@ -130,7 +130,31 @@ brare = [{w for w in s if bdf[w] <= max(2, 0.08 * len(rows))} for s in btoks]
 cite_pat = re.compile(r"taste", re.I)
 steer_pat = re.compile(r"taste[^.\n]{0,120}\b(so|therefore|should|must|need to|don't|do not|instead|avoid|skip|never|not |before|gate|first)\b", re.I)
 push_pat = re.compile(r"\b(unacceptable|add (that|it) back|wrong|revert|undo|that'?s not|you can'?t just|not what i|why did you|i said|stop doing)\b", re.I)
-sessions = []; acts = []; learn_events = []; steer_quotes = []; tps_samples = []; skill_events = []
+# ---- price catalog: Command Code bundles its model list; use it to price cached tokens correctly ----
+def _load_catalog():
+    import shutil
+    paths = []
+    b = shutil.which("cmd") or shutil.which("command-code")
+    if b:
+        d = os.path.dirname(os.path.realpath(b)); paths += [f"{d}/bundled/command-code-knowledge/reference/models.md", f"{d}/../dist/bundled/command-code-knowledge/reference/models.md"]
+    paths += glob.glob(f"{HOME}/.nvm/versions/node/*/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md")
+    paths += glob.glob("/usr/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md") + glob.glob("/usr/local/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md")
+    for pth in paths:
+        if os.path.exists(pth):
+            cat = {}
+            for line in open(pth, errors="ignore"):
+                m = re.match(r"\|\s*`([^`]+)`\s*\|[^|]*\|[^|]*\|[^|]*\|\s*\$([\d.]+)/\$([\d.]+)(?:\s*·\s*cache \$([\d.]+))?", line)
+                if m: cat[m.group(1)] = (float(m.group(2)), float(m.group(3)), float(m.group(4)) if m.group(4) else None)
+            if cat: return cat, pth
+    return {}, None
+CATALOG, CATALOG_PATH = _load_catalog()
+def price_turn(model, inp, cr, cw, out, logged):
+    """USD for one turn from catalog list prices: uncached input, cached input, output. Falls back to the logged figure."""
+    p = CATALOG.get(model)
+    if not p: return logged, False
+    pin, pout, pcache = p; pcache = pin if pcache is None else pcache
+    return ((inp - cr) * pin + cr * pcache + out * pout) / 1e6, True
+sessions = []; acts = []; learn_events = []; steer_quotes = []; tps_samples = []; skill_events = []; PRICED = collections.Counter()
 for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
     if f.endswith("checkpoints.jsonl"): continue
     sid = os.path.basename(f)[:8]
@@ -139,7 +163,7 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
     if os.path.exists(mf): meta = json.load(open(mf))
     S = dict(sid=sid, title=redact(meta.get("title") or ""), asst=0, user=0, cites=0, steer=0, inp=0, out=0, cr=0, cw=0, cost=0.0,
              models=collections.Counter(), tools=collections.Counter(), first=None, last=None, first_in=None, prompts=[], push=0,
-             push_after_cite=0, push_after_nocite=0, turns_cite=0, turns_nocite=0, think_chars=0, bullets_hit=collections.Counter(), pm=collections.defaultdict(collections.Counter), skills=collections.Counter(), turns=[])
+             push_after_cite=0, push_after_nocite=0, turns_cite=0, turns_nocite=0, think_chars=0, logged=0.0, bullets_hit=collections.Counter(), pm=collections.defaultdict(collections.Counter), skills=collections.Counter(), turns=[])
     last_turn_cited = False
     tool_names = {}; prev_time = None
     def _ts(t):
@@ -164,10 +188,13 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
                 if 0.3 < dur < 1800:
                     PMx = S["pm"][mdl]; PMx["secs"] += dur; PMx["out_timed"] += u["outputTokens"]; PMx["timed"] += 1
                     tps_samples.append((mdl, u["outputTokens"] / dur))
-            PM = S["pm"][mdl]; PM["asst"] += 1; PM["inp"] += u.get("inputTokens", 0); PM["out"] += u.get("outputTokens", 0); PM["cr"] += u.get("cacheReadTokens", 0); PM["cost"] += u.get("costUsd", 0) or 0
-            TR_ = dict(ts=ts, model=mdl, inp=u.get("inputTokens", 0), out=u.get("outputTokens", 0), cr=u.get("cacheReadTokens", 0), cw=u.get("cacheWriteTokens", 0), cost=u.get("costUsd", 0) or 0, think=0, cited=False, steer=0, tools=[], skills=[]); S["turns"].append(TR_)
+            logged_ = u.get("costUsd", 0) or 0
+            cost_, from_cat = price_turn(mdl, u.get("inputTokens", 0), u.get("cacheReadTokens", 0), u.get("cacheWriteTokens", 0), u.get("outputTokens", 0), logged_)
+            PRICED["catalog" if from_cat else "logged"] += 1
+            PM = S["pm"][mdl]; PM["asst"] += 1; PM["inp"] += u.get("inputTokens", 0); PM["out"] += u.get("outputTokens", 0); PM["cr"] += u.get("cacheReadTokens", 0); PM["cost"] += cost_; PM["logged"] += logged_
+            TR_ = dict(ts=ts, model=mdl, inp=u.get("inputTokens", 0), out=u.get("outputTokens", 0), cr=u.get("cacheReadTokens", 0), cw=u.get("cacheWriteTokens", 0), cost=cost_, logged=logged_, think=0, cited=False, steer=0, tools=[], skills=[]); S["turns"].append(TR_)
             S["inp"] += u.get("inputTokens", 0); S["out"] += u.get("outputTokens", 0)
-            S["cr"] += u.get("cacheReadTokens", 0); S["cw"] += u.get("cacheWriteTokens", 0); S["cost"] += u.get("costUsd", 0) or 0
+            S["cr"] += u.get("cacheReadTokens", 0); S["cw"] += u.get("cacheWriteTokens", 0); S["cost"] += cost_; S["logged"] += logged_
             if S["first_in"] is None and u.get("inputTokens"): S["first_in"] = u["inputTokens"]
             cited_here = False
             for c in m.get("content", []):
@@ -224,14 +251,14 @@ def clip_session(S, cut):
     if not T: return None
     C = dict(S); C["turns"] = T; C["prompts"] = P
     C["asst"] = len(T); C["user"] = len(P)
-    for k in ("inp", "out", "cr", "cw", "cost"): C[k] = sum(t[k] for t in T)
+    for k in ("inp", "out", "cr", "cw", "cost", "logged"): C[k] = sum(t[k] for t in T)
     C["think_chars"] = sum(t["think"] for t in T); C["cites"] = sum(1 for t in T if t["cited"]); C["steer"] = sum(t["steer"] for t in T)
     C["turns_cite"] = C["cites"]; C["turns_nocite"] = len(T) - C["cites"]
     C["tools"] = collections.Counter(n for t in T for n in t["tools"]); C["skills"] = collections.Counter(n for t in T for n in t["skills"])
     C["models"] = collections.Counter(t["model"] for t in T); C["model"] = C["models"].most_common(1)[0][0]
     pm = collections.defaultdict(collections.Counter)
     for t in T:
-        Q = pm[t["model"]]; Q["asst"] += 1; Q["inp"] += t["inp"]; Q["out"] += t["out"]; Q["cr"] += t["cr"]; Q["cost"] += t["cost"]; Q["think"] += t["think"]; Q["cites"] += t["cited"]; Q["steer"] += t["steer"]
+        Q = pm[t["model"]]; Q["asst"] += 1; Q["inp"] += t["inp"]; Q["out"] += t["out"]; Q["cr"] += t["cr"]; Q["cost"] += t["cost"]; Q["logged"] += t["logged"]; Q["think"] += t["think"]; Q["cites"] += t["cited"]; Q["steer"] += t["steer"]
     C["pm"] = pm
     C["push"] = sum(1 for p in P if p[2]); C["push_after_cite"] = sum(1 for p in P if p[2] and p[3]); C["push_after_nocite"] = sum(1 for p in P if p[2] and not p[3])
     ts_all = [t["ts"] for t in T] + [p[0] for p in P]; C["first"] = min(ts_all); C["last"] = max(ts_all); C["date"] = C["first"][:10]
@@ -650,39 +677,13 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     def med(xs): xs = sorted(xs); return xs[len(xs)//2] if xs else 0
     tps_med = {m: med([v for mm, v in tps_samples if mm == m]) for m in ml}
     H.append(kpi([("models used", len(ml), "Distinct models that produced at least one assistant turn."), ("output tok/s (median)", round(med([v for _, v in tps_samples]), 1), "Output tokens divided by turn duration, median across all timed turns. Network latency is still inside the clock."), ("output tok/turn", fmt(round(tot_out / max(1, sum(s['asst'] for s in sessions)))), "Average output tokens per assistant turn, reasoning included."), ("thinking chars/turn", fmt(round(sum(pm[m]["think"] for m in ml) / max(1, sum(s['asst'] for s in sessions)))), "Visible reasoning produced per turn. More reasoning leaves more room to consult taste."), ("output tokens", fmt(tot_out), "Everything the models generated, reasoning included.")]))
-    cache_note = ""
-    try:
-        import statistics
-        chk = []
-        for m in ml:
-            TT_ = [t for s_ in sessions for t in s_["turns"] if t["model"] == m and t["cost"] > 0 and t["inp"] > 0]
-            if len(TT_) >= 20:
-                # implied $/M for cached vs uncached input via least squares on (uncached, cached, output)
-                import itertools
-                A = [[t["inp"] - t["cr"], t["cr"], t["out"]] for t in TT_]; y_ = [t["cost"] for t in TT_]
-                # normal equations 3x3
-                AtA = [[sum(a[i] * a[j] for a in A) for j in range(3)] for i in range(3)]; Aty = [sum(a[i] * yy for a, yy in zip(A, y_)) for i in range(3)]
-                def solve(M_, v):
-                    M_ = [row[:] + [v[i]] for i, row in enumerate(M_)]
-                    for i in range(3):
-                        piv = max(range(i, 3), key=lambda r: abs(M_[r][i])); M_[i], M_[piv] = M_[piv], M_[i]
-                        if abs(M_[i][i]) < 1e-12: return None
-                        for r in range(3):
-                            if r != i:
-                                f_ = M_[r][i] / M_[i][i]; M_[r] = [x - f_ * y2 for x, y2 in zip(M_[r], M_[i])]
-                    return [M_[i][3] / M_[i][i] for i in range(3)]
-                c_ = solve(AtA, Aty)
-                if c_ and c_[0] > 0: chk.append((m, c_[1] / c_[0]))
-        if chk:
-            flat = [m for m, r_ in chk if r_ > 0.8]
-            cache_note = (" Implied billing: cached input costs " + ", ".join(f"{100*r_:.0f}%" for _, r_ in chk[:3]) + " of uncached for " + ", ".join(esc(m) for m, _ in chk[:3]) + (". Cached tokens are billed at nearly full rate, so cache hit does not reduce logged cost." if flat else "."))
-    except Exception: pass
-    H.append("<p class=charttip>Attributed per message from each reply's own model and usage record. Output tok/s is the wall-clock speed you waited for, median per turn. Free tiers log $0." + cache_note + "</p>")
-    H.append(table(["Model", "#Turns", "#Input tokens", "#Cache hit %", "#Output tokens", "#Cost $", "#Input tok/turn", "#Output tok/turn", "#Output tok/s", "#Thinking chars/turn", "#Activations /100 turns", "#Steering share %"], [(m, pm[m]["asst"], fmt(pm[m]["inp"]), round(100 * pm[m]["cr"] / max(1, pm[m]["inp"])), fmt(pm[m]["out"]), round(pm[m]["cost"], 2), fmt(round(pm[m]["inp"] / max(1, pm[m]["asst"]))), fmt(round(pm[m]["out"] / max(1, pm[m]["asst"]))), round(tps_med[m], 1), round(pm[m]["think"] / max(1, pm[m]["asst"])), round(100 * ma[m] / max(1, pm[m]["asst"]), 1), round(100 * ms[m] / max(1, ma[m]))) for m in ml]))
+    cat_note = (f" Cost is priced from Command Code's bundled model catalog (uncached input, cached input at the cache rate, output) for {PRICED['catalog']} of {PRICED['catalog'] + PRICED['logged']} turns; models missing from the catalog use the CLI-logged figure." if CATALOG else " Cost is the CLI-logged figure; the model catalog was not found on this machine.")
+    H.append("<p class=charttip>Attributed per message from each reply's own model and usage record. Output tok/s is the wall-clock speed you waited for, median per turn. Free tiers log $0." + cat_note + " The CLI-logged column charges cached input at the full input rate, so it overstates cache-heavy models." + "</p>")
+    H.append(table(["Model", "#Turns", "#Input tokens", "#Cache hit %", "#Output tokens", "#Cost $", "#CLI-logged $", "#Input tok/turn", "#Output tok/turn", "#Output tok/s", "#Thinking chars/turn", "#Activations /100 turns", "#Steering share %"], [(m, pm[m]["asst"], fmt(pm[m]["inp"]), round(100 * pm[m]["cr"] / max(1, pm[m]["inp"])), fmt(pm[m]["out"]), round(pm[m]["cost"], 2), round(pm[m]["logged"], 2), fmt(round(pm[m]["inp"] / max(1, pm[m]["asst"]))), fmt(round(pm[m]["out"] / max(1, pm[m]["asst"]))), round(tps_med[m], 1), round(pm[m]["think"] / max(1, pm[m]["asst"])), round(100 * ma[m] / max(1, pm[m]["asst"]), 1), round(100 * ms[m] / max(1, ma[m]))) for m in ml]))
     H.append(two(hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620),
                  hbars("Output Tokens per Turn by Model", [(m, round(pm[m]["out"] / max(1, pm[m]["asst"])), "") for m in ml], "Output tokens per assistant turn", "Mean output tokens per assistant turn, reasoning included", ylabel="Model", lw=230, w=620)))
     OV["speed"] = hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620)
-    OV["cost"] = hbars("Logged Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)
+    OV["cost"] = hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)
     OV["model"] = hbars("Taste Activations per 100 Turns by Model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "Consultations per 100 assistant turns", ylabel="Model", lw=230, w=620)
     # ---- two-way influence: model -> harness (bullets written) vs harness -> model (activations) ----
     written = collections.Counter()
@@ -793,7 +794,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         wk = (datetime.date.fromisoformat(s["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(s["date"]).weekday())).isoformat()
         weeks.setdefault(wk, collections.Counter()).update(s["models"])
     H.append(two(tseries("Assistant Turns per Week by Model", [(wk[5:], dict(c)) for wk, c in weeks.items()], ml, mcols, "Week starting", "Assistant turns", w=620, h=380, leg=legend(mcols, "Model")),
-                 hbars("Logged Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)))
+                 hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)))
 
     # ================= USAGE =================
     tab("Usage")
@@ -879,11 +880,11 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     if dups: h3("Near-duplicates"); H.append("<ul>" + "".join(f"<li>#{rows[i]['i']} ≈ #{rows[j]['i']}: {esc(rows[i]['text'][:100])}…</li>" for i, j in dups) + "</ul>")
     H.append("</div>")
     ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Cost, speed and taste at a glance.</p>"]
-    ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "What the provider billed in this range. Free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
+    ov.append(kpi([("cost", f"${tot_cost:,.2f}", "Priced from Command Code's model catalog: uncached input, cached input at the cache rate, output. Free tiers are $0. Models missing from the catalog use the CLI-logged figure."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
     ins = []
     if ml:
         top_cost = max(ml, key=lambda m: pm[m]["cost"]); tc_ = pm[top_cost]["cost"]
-        if tot_cost > 0: ins.append(f"<b>{esc(top_cost)}</b> accounts for {100*tc_/tot_cost:.0f}% of logged cost with {100*pm[top_cost]['asst']/max(1,sum(s['asst'] for s in sessions)):.0f}% of turns.")
+        if tot_cost > 0: ins.append(f"<b>{esc(top_cost)}</b> accounts for {100*tc_/tot_cost:.0f}% of cost with {100*pm[top_cost]['asst']/max(1,sum(s['asst'] for s in sessions)):.0f}% of turns.")
         rate = {m: 100 * ma[m] / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
         if len(rate) >= 2:
             hi_m = max(rate, key=rate.get); lo_m = min(rate, key=rate.get)
@@ -921,7 +922,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     def tok_items(src):
         return [dict(_s="cached input", _v=t["cr"], ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="uncached input", _v=max(0, t["inp"] - t["cr"]), ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="output", _v=t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
     tk_ = by_hour(tok_items(sessions), lambda a: a["ts"][:19])
-    cost_pane = tseries(f"Logged Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · free tiers log $0", w=620, h=320, leg=legend(mcols, "Model"))
+    cost_pane = tseries(f"Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · catalog prices · free tiers $0", w=620, h=320, leg=legend(mcols, "Model"))
     tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], TOKS, TOKC, BUCKET_WORD.capitalize(), "Tokens", "Cached input, uncached input and output", w=620, h=320, leg=legend(TOKC, "Token kind"))
     ov.append(two(tseries(f"Assistant Turns {PER.title()}", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
                   toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
@@ -932,7 +933,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         if any(sum(c.values()) for c in th24.values()):
             tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
             ov.append(two(tseries("Assistant Turns per Hour, Last 24 Hours", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300, leg=legend(ALL_MCOLS, "Model")),
-                          toggle([("Cost", tseries("Logged Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
+                          toggle([("Cost", tseries("Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
                                   ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached input, uncached input and output", w=620, h=300, leg=legend(TOKC, "Token kind")))])))
     h3("Cost and speed", ov)
     ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
