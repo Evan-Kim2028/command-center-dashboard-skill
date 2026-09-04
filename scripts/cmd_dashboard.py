@@ -388,7 +388,8 @@ table.sortable th,#bt-all th,#bt-30d th{cursor:pointer;user-select:none}th.asc::
 </style>"""]
 
 ROWS_ALL = rows
-def build(SUF, rows, sessions, acts):
+def build(SUF, rows, sessions, acts, rows_r=None):
+    rows_r = rows if rows_r is None else rows_r
     H = []
     dc_all = collections.Counter(r["domain"] for r in rows)
     KEEP = {d for d, _ in dc_all.most_common(3)}
@@ -429,29 +430,33 @@ def build(SUF, rows, sessions, acts):
 
     # ================= TASTE =================
     tab("Taste")
-    H.append(kpi([("bullets", len(rows), "One bullet = one learned preference or fact, stored as a line in taste.md."), ("share of every prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "The taste file is pasted into the system prompt on every request. This is how much of the first-turn prompt it takes up."), ("work areas", len(dc), "Which part of your work a bullet is about, assigned by keywords."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each bullet. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
+    H.append(kpi([("bullets in file", len(rows), "One bullet = one learned preference or fact, stored as a line in taste.md. The whole file is injected regardless of range."), ("learned in this range", len(rows_r), "Bullets whose learned-from session falls inside the selected range."), ("share of every prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "The taste file is pasted into the system prompt on every request. This is how much of the first-turn prompt it takes up."), ("work areas", len(dc), "Which part of your work a bullet is about, assigned by keywords."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each bullet. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
     H.append(f"<div class=card><b>How taste reaches the model.</b> The whole file ({fmt(est_tokens)} tokens, {TOK_NOTE}) is pasted into the system prompt on every request, framed as requirements. Latest first turn was {fmt(latest_in)} tokens.</div>")
-    grid = [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl]
-    habits_chart = flex(stacked_h("Work habits by work area", grid, dl, cols, "Number of bullets", "Work habit", "Each bar is one habit. Colors show which work area the bullets came from.", w=620), legend(cols, "Work area", dc))
+    rows_main_r = [r for r in rows_r if r["domain"] in KEEP]; dc_r = collections.Counter(r["domain"] for r in rows_main_r)
+    grid = [(t, {d: sum(1 for r in rows_main_r if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl]
+    habits_chart = flex(stacked_h("Work habits by work area", grid, dl, cols, "Number of bullets", "Work habit", "Bullets learned in this range. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc_r))
     habit_defs = "<p class=muted>A bullet can show more than one habit." + (f" Too small to chart: {', '.join(f'{d} ({k})' for d, k in dc_all.items() if d not in KEEP)}." if len(dc_all) > len(dc) else "") + "</p><ul>" + "".join(f"<li><b>{t}</b>: {d}</li>" for t, d, _ in TRAITS) + "</ul>"
     d0 = min(datetime.date.fromisoformat(r["date"]) for r in rows); d1 = max(datetime.date.fromisoformat(r["date"]) for r in rows); span = max(1, (d1 - d0).days)
-    H.append(two(habits_chart, habit_defs)); OV["habits"] = habits_chart
+    if not rows_r: H.append("<p class=muted style='padding:12px 0'>No bullets were learned in this range. Widen the range to see the file's content; the whole file is still injected into every prompt.</p>")
+    else: H.append(two(habits_chart, habit_defs))
+    OV["habits"] = flex(stacked_h("Work habits by work area", [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl], dl, cols, "Number of bullets", "Work habit", "Whole taste file. Each bar is one habit; colors show the work area.", w=620), legend(cols, "Work area", dc))
     h3("Where the bullets came from")
-    srcs = collections.Counter(r["src"] for r in rows); sl = [k for k, _ in srcs.most_common()]; scols = {k: PAL[i % len(PAL)] for i, k in enumerate(sl)}
+    srcs = collections.Counter(r["src"] for r in rows_r); sl = [k for k, _ in srcs.most_common()]; scols = {k: PAL[i % len(PAL)] for i, k in enumerate(sl)}
     weeks_b = collections.OrderedDict()
-    for r in sorted(rows, key=lambda r: r["date"]):
+    for r in sorted(rows_r, key=lambda r: r["date"]):
         wk = (datetime.date.fromisoformat(r["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(r["date"]).weekday())).isoformat()
         weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
     H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. Claude Code sessions are read from disk; cmd sessions carry the model that was running. Cursor transcripts are not readable locally, so bullets learned there show as unmatched.</p>")
-    H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
+    if rows_r: H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
                  flex(stacked_v("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380), legend(scols, "Source", srcs))))
     h3("All bullets")
     H.append("<p class=muted>Activations = times matched in the model's thinking; steering = of those, changed the plan. Click a column header to sort.</p>")
-    bdata = [dict(i=r["i"], area=r["domain"], habits=r["traits"], conf=r["conf"], date=r["date"], src=r["src"], acts=r["acts"], steers=r["steers"], text=r["text"]) for r in rows]
-    areas = sorted(set(r["domain"] for r in rows)); habs = [t for t, _, _ in TRAITS]
+    bdata = [dict(i=r["i"], area=r["domain"], habits=r["traits"], conf=r["conf"], date=r["date"], src=r["src"], acts=r["acts"], steers=r["steers"], text=r["text"]) for r in rows_r]
+    areas = sorted(set(r["domain"] for r in rows_r)); habs = [t for t, _, _ in TRAITS]
+    dr0 = min([r["date"] for r in rows_r] or [d0.isoformat()]); dr1 = max([r["date"] for r in rows_r] or [d1.isoformat()])
     H.append(f"<div class=filters id='bf{SUF}'><label>Area <select data-k='area'><option value=''>all</option>" + "".join(f"<option>{esc(a)}</option>" for a in areas) + "</select></label>"
              "<label>Habit <select data-k='habit'><option value=''>all</option>" + "".join(f"<option>{esc(t)}</option>" for t in habs) + "</select></label>"
-             f"<label>From <input type=date data-k='from' value='{d0}'></label><label>To <input type=date data-k='to' value='{d1}'></label>"
+             f"<label>From <input type=date data-k='from' value='{dr0}'></label><label>To <input type=date data-k='to' value='{dr1}'></label>"
              "<label>Search <input type=search data-k='q' placeholder='text…'></label><span class=muted data-k='count'></span></div>")
     H.append(f"<div id='bt{SUF}'></div><div class=pager id='bp{SUF}'></div>")
     H.append("<script>(function(){const D=" + json.dumps(bdata) + ";const S='" + SUF + "';const f=document.getElementById('bf'+S),t=document.getElementById('bt'+S),p=document.getElementById('bp'+S);"
@@ -460,8 +465,8 @@ def build(SUF, rows, sessions, acts):
              "function rows(){return D.filter(r=>(!st.area||r.area===st.area)&&(!st.habit||r.habits.includes(st.habit))&&r.date>=st.from&&r.date<=st.to&&(!st.q||r.text.toLowerCase().includes(st.q))).sort((a,b)=>{let x=a[st.sort],y=b[st.sort];if(Array.isArray(x)){x=x.join();y=y.join()}if(x<y)return st.asc?-1:1;if(x>y)return st.asc?1:-1;return a.i-b.i;});}"
              "function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}"
              "function render(){const R=rows();const n=Math.max(1,Math.ceil(R.length/st.size));st.page=Math.min(st.page,n-1);const P=R.slice(st.page*st.size,(st.page+1)*st.size);"
-             "t.innerHTML='<table><tr>'+cols.map(([k,l])=>`<th data-k='${k}' class='${['i','conf','acts','steers'].includes(k)?'num':''} ${st.sort===k?(st.asc?'asc':'desc'):''}'>${l}</th>`).join('')+'</tr>'+P.map(r=>`<tr><td class=num>${r.i}</td><td>${esc(r.area)}</td><td>${esc(r.habits.join(', ')||'—')}</td><td class=num>${r.conf.toFixed(2)}</td><td>${r.date}</td><td>${esc(r.src)}</td><td class=num>${r.acts}</td><td class=num>${r.steers}</td><td>${esc(r.text)}</td></tr>`).join('')+'</table>';"
-             "t.querySelectorAll('th').forEach(h=>h.onclick=()=>{const k=h.dataset.k;if(st.sort===k)st.asc=!st.asc;else{st.sort=k;st.asc=k==='text'||k==='area'||k==='habits';}render();});"
+             "t.innerHTML='<table><tr>'+cols.map(([k,l])=>`<th data-k='${k}' class='${['i','conf','acts','steers'].includes(k)?'num':''} ${st._k===k?(st.asc?'asc':'desc'):''}'>${l}</th>`).join('')+'</tr>'+P.map(r=>`<tr><td class=num>${r.i}</td><td>${esc(r.area)}</td><td>${esc(r.habits.join(', ')||'—')}</td><td class=num>${r.conf.toFixed(2)}</td><td>${r.date}</td><td>${esc(r.src)}</td><td class=num>${r.acts}</td><td class=num>${r.steers}</td><td>${esc(r.text)}</td></tr>`).join('')+'</table>';"
+             "t.querySelectorAll('th').forEach(h=>h.onclick=()=>{const k=h.dataset.k;const textish=k==='text'||k==='area'||k==='habits'||k==='src';if(st._k!==k){st.sort=k;st.asc=textish;st._k=k;st._n=1;}else if(st._n===1){st.asc=!st.asc;st._n=2;}else{st.sort='date';st.asc=false;st._k=undefined;st._n=0;}render();});"
              "f.querySelector('[data-k=count]').textContent=R.length+' bullets';p.innerHTML=`<button ${st.page===0?'disabled':''} data-d='-1'>‹ Prev</button><span>Page ${st.page+1} of ${n}</span><button ${st.page>=n-1?'disabled':''} data-d='1'>Next ›</button>`;p.querySelectorAll('button').forEach(b=>b.onclick=()=>{st.page+=+b.dataset.d;render();});}"
              "f.querySelectorAll('select,input').forEach(el=>el.oninput=()=>{st[el.dataset.k]=el.dataset.k==='q'?el.value.toLowerCase():el.value;st.page=0;render();});render();})();</script>")
 
@@ -551,17 +556,24 @@ def build(SUF, rows, sessions, acts):
     for s in sessions: tools.update(s["tools"])
     ed = tools.get("edit_file", 0) + tools.get("write_file", 0); rd = tools.get("read_file", 0) + tools.get("grep", 0) + tools.get("glob", 0) + tools.get("read_multiple_files", 0)
     tools_chart = hbars("Tool calls", [(t, k, "") for t, k in tools.most_common(15)], "Calls", f"Edits per read {ed/max(1,rd):.2f} · shell calls per edit {tools.get('shell_command',0)/max(1,ed):.1f} · subagents {tools.get('agent',0)}", ylabel="Tool", w=620, lw=170)
-    hours = collections.Counter(); wdays = collections.Counter()
+    hours = collections.defaultdict(collections.Counter); wdays = collections.defaultdict(collections.Counter); opens = collections.defaultdict(collections.Counter); plens = collections.defaultdict(collections.Counter)
+    slash = 0
     for s in sessions:
-        for ts, _ in s["prompts"]:
-            try: dt = datetime.datetime.fromisoformat(ts.rstrip("Z")); hours[dt.hour] += 1; wdays[dt.strftime("%a")] += 1
+        mdl_s = s["model"]
+        for ts, t in s["prompts"]:
+            if not t.strip(): continue
+            try: dt = datetime.datetime.fromisoformat(ts.rstrip("Z")); hours[dt.hour][mdl_s] += 1; wdays[dt.strftime("%a")][mdl_s] += 1
             except Exception: pass
-    hour_chart = hbars("Prompts by hour (UTC)", [(f"{h:02d}:00", hours.get(h, 0), "") for h in range(24) if hours.get(h, 0)], "Prompts", ylabel="Hour", w=620, lw=120, sort=False)
-    wday_chart = hbars("Prompts by weekday", [(w, wdays.get(w, 0), "") for w in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] if wdays.get(w)], "Prompts", ylabel="Day", w=620, lw=120, sort=False)
-    slash = sum(1 for t in allp if t.lstrip().startswith("/"))
-    opens = collections.Counter(" ".join(re.findall(r"[a-z']+", t.lower())[:2]) for t in allp if not t.lstrip().startswith("/"))
-    open_chart = hbars("How prompts open (first two words)", [(o, k, "") for o, k in opens.most_common(12)], "Prompts", f"{slash} prompts were slash commands", ylabel="Opening", w=620, lw=150)
-    len_chart = hbars("Prompt length", [(f"{lo}–{lo+99}", sum(1 for l in lens if lo <= l < lo + 100), "") for lo in range(0, min(1000, lens[-1] + 1), 100)] + [("1000+", sum(1 for l in lens if l >= 1000), "")], "Prompts", ylabel="Characters", w=620, lw=120, sort=False)
+            if t.lstrip().startswith("/"): slash += 1
+            else: opens[" ".join(re.findall(r"[a-z']+", t.lower())[:2])][mdl_s] += 1
+            L_ = len(t); plens[("1000+" if L_ >= 1000 else f"{L_//100*100}–{L_//100*100+99}")][mdl_s] += 1
+    mleg = legend(mcols, "Model")
+    hour_chart = flex(stacked_h("Prompts by hour (UTC)", [(f"{h:02d}:00", dict(hours[h])) for h in range(24) if hours.get(h)], ml, mcols, "Prompts", "Hour", "Stacked by the model the session was running", w=620), mleg)
+    wday_chart = flex(stacked_h("Prompts by weekday", [(w, dict(wdays[w])) for w in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] if wdays.get(w)], ml, mcols, "Prompts", "Day", "Stacked by model", w=620), mleg)
+    top_open = sorted(opens, key=lambda o: -sum(opens[o].values()))[:12]
+    open_chart = flex(stacked_h("How prompts open (first two words)", [(o, dict(opens[o])) for o in top_open], ml, mcols, "Prompts", "Opening", f"{slash} prompts were slash commands · stacked by model", w=620), mleg)
+    len_keys = sorted(plens, key=lambda k: 10**6 if k == "1000+" else int(k.split("–")[0]))
+    len_chart = flex(stacked_h("Prompt length", [(k, dict(plens[k])) for k in len_keys], ml, mcols, "Prompts", "Characters", "Stacked by model", w=620), mleg)
     H.append(two(stacked_v("Prompts per week", [(wk[5:], {"prompts": c["prompts"]}) for wk, c in weeks_u.items()], ["prompts"], {"prompts": "var(--bar)"}, "Week starting", "Prompts", w=620, h=300), tools_chart)); H.append(two(open_chart, len_chart)); H.append(two(hour_chart, wday_chart))
 
     # ================= HEALTH =================
@@ -614,12 +626,14 @@ H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" +
 H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")
 for k, lab, rv, sv, av in views:
     H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != DEFAULT_VIEW else "") + ">")
-    if rv and sv: H += build("-" + k, rv, sv, av)
+    _days = dict((x, y) for x, _, y in RANGES)[k]
+    if rv and sv: H += build("-" + k, rv, sv, av, [r for r in rows if r["date"] >= (_cut(_days - 1) if _days else "0000")])
     else: H.append(f"<p class=muted style='padding:24px 0'>No cmd sessions in this range. Pick a wider range above.</p>")
     H.append("</div>")
-H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');localStorage.setItem('cmdtab',i);};});const i=+(localStorage.getItem('cmdtab')||0);bs[i].click();});</script>")
-H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));localStorage.setItem('cmdrange',k);const i=+(localStorage.getItem('cmdtab')||0);const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));showRange('" + DEFAULT_VIEW + "');"
+H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
+H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
+H.append("<script>document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),tb=rows[0]&&rows[0].parentNode;if(!tb)return;if(!tbl._orig)tbl._orig=rows.slice();const state=th.classList.contains('desc')?'asc':th.classList.contains('asc')?'reset':'desc';tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));if(state==='reset'){tbl._orig.forEach(r=>tb.appendChild(r));return;}th.classList.add(state);const asc=state==='asc';const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};rows.slice().sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));});</script>")
 open(OUT, "w").write("\n".join(H))
 print("wrote", OUT, "| bullets", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))
 if not A.no_open:

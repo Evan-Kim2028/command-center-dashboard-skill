@@ -39,13 +39,13 @@ If the current directory has no cmd sessions the script falls back to the projec
 Six tabs. Each answers one question; charts are not repeated across tabs.
 
 1. **Overview** (default): cost, input tokens, cache hit, output tok/s, taste share of prompt, activations, steering share, never-activated. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
-2. **Taste**: what the file says. Habits by work area, where bullets came from (Claude Code / cmd + model / unmatched), bullets learned per week by source, and a paginated bullet table with area, habit, date and text filters, sorted by date descending.
+2. **Taste**: what the file says. Bullets learned in the selected range: habits by work area, where bullets came from (Claude Code / cmd + model / unmatched), bullets learned per week by source, and a paginated bullet table with area, habit, date and text filters, sorted by date descending.
 3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per bullet, most-activated bullets, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
 4. **Models**: per-message attribution. Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
-5. **Usage**: session timeline bubble chart, prompts per week, tool calls, prompt openings, prompt length, prompts by hour and weekday, sessions table (collapsed, sortable).
+5. **Usage**: session timeline bubble chart, prompts per week, tool calls, and prompt openings, prompt length, prompts by hour and weekday each stacked by the model the session ran; sessions table (collapsed, sortable).
 6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, bullet length, base prompt size per session, bullets added over time, never-activated bullets, longest bullets, duplicates.
 
-Global controls: Today / 7 days / 30 days / All time (defaults to the shortest range with sessions, keeps the current tab, remembers your choice), Dark / Light (persisted), tooltips on every KPI.
+Global controls: Today / 7 days / 30 days / All time (defaults to the shortest range with sessions and applies to every tab, including which bullets count as learned in range), Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
 
 ## Definitions the script uses (keep these consistent if you change anything)
 
