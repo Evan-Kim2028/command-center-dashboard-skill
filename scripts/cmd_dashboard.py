@@ -331,7 +331,7 @@ def hbars(title, items, xlabel, sub=None, w=900, color="var(--bar)", ylabel=None
     if ylabel: out.append(T(14, (top + rh * len(items)) / 2, ylabel, 13, "bold", "middle", rot=True))
     return "".join(out) + "</svg>"
 
-def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900):
+def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900, unit="", total=True):
     """rowsx: [(label, {series: value})]"""
     rh, L0, top = 36, (215 if w >= 800 else 190), 70
     h = top + rh * len(rowsx) + 64; mx = max([sum(d.values()) for _, d in rowsx] + [1])
@@ -348,9 +348,9 @@ def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900):
             if not v: continue
             x0, x1 = xs(x), xs(x + v)
             out.append(R(x0, y + 5, x1 - x0, rh - 10, colmap[sname], "", cls="hb"))
-            if x1 - x0 > 18: out.append(T((x0 + x1) / 2, y + rh / 2 + 5, v, 12, "bold", "middle", "var(--onbar)"))
+            if x1 - x0 > 18: out.append(T((x0 + x1) / 2, y + rh / 2 + 5, f"{v}{unit}", 12, "bold", "middle", "var(--onbar)"))
             x += v
-        out.append(T(xs(x) + 8, y + rh / 2 + 5, x, 12, "600", fill="var(--muted)"))
+        if total: out.append(T(xs(x) + 8, y + rh / 2 + 5, x, 12, "600", fill="var(--muted)"))
         out.append(f"<rect class='hit' x='{L0:.0f}' y='{y:.0f}' width='{w - L0 - 40:.0f}' height='{rh:.0f}' fill='transparent' data-tip=\"{_tipdata(lab, d, series, colmap)}\"/>")
     out.append(L(L0, top - 8, L0, top + rh * len(rowsx))); out.append(L(L0, top + rh * len(rowsx), w - 40, top + rh * len(rowsx)))
     out.append(T((L0 + w - 40) / 2, h - 12, xlabel, 13, "bold", "middle")); out.append(T(14, (top + rh * len(rowsx)) / 2, ylabel, 13, "bold", "middle", rot=True))
@@ -712,7 +712,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         if tot_ <= 0 or pm[m]["asst"] < 10: continue
         tw_pairs.append((m, {"creates": round(100 * cr_ / tot_), "uses": round(100 * us_ / tot_)}))
     tw_cols = {"creates": "var(--accent)", "uses": "var(--bar)"}
-    OV["twoway"] = flex(stacked_h("Creates taste vs uses taste, by model", tw_pairs, list(tw_cols), tw_cols, "Share of the model's taste traffic, %", "Model", "Each bar = 100% of that model's taste traffic. Blue: bullets it created. Grey: bullets it used.", w=620), legend(tw_cols, "Direction"))
+    OV["twoway"] = flex(stacked_h("Creates taste vs uses taste, by model", tw_pairs, list(tw_cols), tw_cols, "Share of the model's taste traffic", "Model", "Blue: bullets it created. Grey: bullets it used.", w=620, unit="%", total=False), legend(tw_cols, "Direction"))
     H.append(two(OV.get("twoway", ""),
                  hbars("Taste traffic by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Created + used, per 100 turns", "How much the model interacts with taste at all", ylabel="Model", lw=230, w=620)))
     # ---- chain of thought per model, and whether taste changes it ----
