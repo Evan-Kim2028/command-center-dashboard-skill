@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Command Code dashboard: everything on disk about cmd, taste, sessions, cost, and how taste steers the agent.
+Usage: python3 cmd_dashboard.py [--public] [--project DIR] [--out FILE] [--no-open]
+Self-contained HTML, no external deps. Reads ~/.commandcode and <project>/.commandcode."""
+import re, os, sys, json, glob, html, math, bisect, collections, datetime, argparse, subprocess
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--public", action="store_true", help="redact names/hosts/paths for sharing")
+ap.add_argument("--project", default=os.getcwd(), help="project dir containing .commandcode/taste")
+ap.add_argument("--out", default=None)
+ap.add_argument("--no-open", action="store_true")
+ap.add_argument("--redact", default=None, help="JSON file with extra [[pattern, replacement], ...]")
+ap.add_argument("--list", action="store_true", help="list Command Code project dirs found on this machine and exit")
+A = ap.parse_args()
+HOME = os.path.expanduser("~")
+PROJ = os.path.abspath(A.project)
+CC_HOME = f"{HOME}/.commandcode"
+TASTE = f"{PROJ}/.commandcode/taste/taste.md"
+if not os.path.exists(TASTE):
+    TASTE = f"{CC_HOME}/taste/taste.md"
+slug = re.sub(r"[^a-z0-9]+", "-", PROJ.lower()).strip("-")
+SESS = f"{CC_HOME}/projects/{slug}"
+def _proj_dirs():
+    out = []
+    for d in glob.glob(f"{CC_HOME}/projects/*"):
+        n = len([f for f in glob.glob(f"{d}/*.jsonl") if not f.endswith("checkpoints.jsonl")])
+        if n: out.append((n, d))
+    return sorted(out, reverse=True)
+if A.list:
+    for n, d in _proj_dirs(): print(f"{n:4d} sessions  {d}")
+    sys.exit(0)
+if not os.path.isdir(SESS) or not glob.glob(f"{SESS}/*.jsonl"):
+    pd = _proj_dirs()
+    if pd:
+        SESS = pd[0][1]; print(f"note: no cmd sessions for {PROJ}; using {SESS} ({pd[0][0]} sessions). Pass --project to choose.", file=sys.stderr)
+    else:
+        print(f"error: no Command Code sessions found under {CC_HOME}/projects. Run a few cmd sessions first.", file=sys.stderr); sys.exit(2)
+CFG = f"{SESS}/config.json"
+OUT = A.out or f"{PROJ}/cmd-dashboard{'-public' if A.public else ''}.html"
+PUBLIC = A.public
+
+# ---------------- redaction ----------------
+REDACT = []
+for cand in [A.redact, f"{PROJ}/.commandcode/redact.json", f"{CC_HOME}/redact.json"]:
+    if cand and os.path.exists(cand):
+        REDACT += [tuple(x) for x in json.load(open(cand))]
+REDACT = [(re.escape(HOME), "~")] + REDACT + [(r"\b" + re.escape(os.path.basename(HOME)) + r"\b", "the user")]
+def redact(t):
+    if not PUBLIC: return t
+    for pat, rep in REDACT: t = re.sub(pat, rep, t, flags=re.I)
+    return t
+def esc(s): return html.escape(str(s))
+
+# ---------------- taste bullets ----------------
+def _session_cwd():
+    for f in glob.glob(f"{SESS}/*.jsonl"):
+        try:
+            o = json.loads(open(f, errors="ignore").readline())
+            if o.get("cwd"): return o["cwd"]
+        except Exception: pass
+    return None
+def _taste_for(sess_dir):
+    for f in glob.glob(f"{sess_dir}/*.jsonl"):
+        try:
+            o = json.loads(open(f, errors="ignore").readline()); c = o.get("cwd")
+            if c and os.path.exists(f"{c}/.commandcode/taste/taste.md") and os.path.getsize(f"{c}/.commandcode/taste/taste.md") > 0: return f"{c}/.commandcode/taste/taste.md"
+        except Exception: pass
+    return None
+if not (os.path.exists(TASTE) and os.path.getsize(TASTE) > 0):
+    t = _taste_for(SESS)
+    if not t:
+        for n, d in _proj_dirs():
+            t = _taste_for(d)
+            if t: SESS = d; print(f"note: switching to {d} ({n} sessions) because it has a taste file", file=sys.stderr); break
+    if not t and os.path.exists(f"{CC_HOME}/taste/taste.md") and os.path.getsize(f"{CC_HOME}/taste/taste.md") > 0: t = f"{CC_HOME}/taste/taste.md"
+    if t: TASTE = t; print(f"note: using taste file {TASTE}", file=sys.stderr)
+raw = open(TASTE).read() if os.path.exists(TASTE) else ""
+if not raw.strip():
+    print(f"error: no taste bullets found (looked at {TASTE}). Run /taste or cmd learn-taste first.", file=sys.stderr); sys.exit(2)
+bul = [l[2:].strip() for l in raw.splitlines() if l.startswith("- ")]
+seen = set(); bullets = []
+for b in bul:
+    if b[:80] in seen: continue
+    seen.add(b[:80]); bullets.append(b)
+def conf(b):
+    m = re.search(r"Confidence:\s*([0-9.]+)", b); return float(m.group(1)) if m else 0.7
+def strip(b): return redact(re.sub(r"\s*Confidence:.*$", "", b))
+
+TRAITS = [
+    ("Evidence-obsessed", "wants claims verified against primary artifacts, re-checks its own findings",
+     r"evidence|verify|verif|primary|re-verify|hostile|adversarial|exaggerat|calibrated|hypothes|reproduc|actual code|inspection|cross-referenc|prove"),
+    ("Process-gated", "plan, align, stage, explicit go-ahead before prod or issues",
+     r"go-ahead|gates?|align|approv|staged|read-only|dry-run|before (any|enabling|proposing|shipping|recommending|terminating|announce)|Update before"),
+    ("Complexity-averse", "fewer layers, one owner per service, maintainability over structure",
+     r"complexity|simplif|maintainab|one clear owner|collapsing|too many|reason about|mirror .* conventions|rather than inventing|not merely"),
+    ("Ops-hardened", "systemd, VPS, memory, exit codes, locks, hard-won gotchas",
+     r"systemd|gotcha|VPS|SSH|host|journal|timer|admission|memory|swap|exit|lock|EnvironmentFile|NODE_ENV"),
+    ("Parallel & cheap", "subagent fan-out, free models, backfill now",
+     r"subagent|parallel|dynamic workflow|Haiku|free|cost|token|cache|backfill|spend"),
+    ("Durable-state", "everything in GitHub, ADRs, skills; resumable from any machine",
+     r"GitHub|ADR|persist|repo docs|skills?|resum|any machine|multiple machines|umbrella|tracker|Blocked by|documented"),
+    ("Terse in, structured out", "one-line reports expected to be self-diagnosed; verdict-first output",
+     r"verdict-first|brief|terse|one-liner|status update|summary|columns|table|framing|reading level|picturebook|high-level|delta|histogram|short multi-post"),
+    ("Data-quality guardian", "write-time fences, goldens, canaries, provenance",
+     r"guard|invariant|canary|golden|fence|integrity|provenance|quality|eval|degenerate|known_bad|detector"),
+    ("Open-by-default product", "free public API/MCP, rate limits not paywalls, docs before announce",
+     r"free|public|paywall|rate limit|MCP|announce|changelog|llms\.txt|OpenAPI|external agents|frictionless"),
+]
+def traits(b): return [t for t, _, p in TRAITS if re.search(p, b, re.I)]
+DOMAINS = [
+    ("production data lake", r"lake|gold\.|Iceberg|builder|sidecar|partition|pipeline|canary|golden|eval|retention|systemd|VPS|admission|scrap|oracle"),
+    ("public API / MCP", r"MCP|public|API|announce|changelog|llms|OpenAPI|chat|router"),
+    ("engineering process", r"GitHub|issue|CI|worktree|merge|commit|PR\b|ADR|plan|workflow|subagent|skill|verify|report|status"),
+    ("job search", r"job|resume|application|ATS|relocat"),
+    ("media", r"voice|reel|video|render|episode"),
+]
+def domain(b):
+    for d, p in DOMAINS:
+        if re.search(p, b, re.I): return d
+    return "other"
+rows = [dict(i=i + 1, raw=b, text=strip(b), conf=conf(b), traits=traits(b), domain=domain(b), n=len(b)) for i, b in enumerate(bullets)]
+# bullet rare-token index for activation matching
+WORD = re.compile(r"[a-z][a-z0-9_\-]{3,}")
+STOPB = set("that with this from when than rather into over each also only just then them they their there these those which while where what want wants prefer prefers expect expects should would could before after about against between across both been being have have had not are was were its own via per one two all any some such more most less same other every never always user users agent agents confidence work working code file files data e.g. etc than when the and for".split())
+btoks = [set(w for w in WORD.findall(r["raw"].lower()) if w not in STOPB) for r in rows]
+bdf = collections.Counter(w for s in btoks for w in s)
+brare = [{w for w in s if bdf[w] <= max(2, 0.08 * len(rows))} for s in btoks]
+
+# ---------------- sessions ----------------
+cite_pat = re.compile(r"taste", re.I)
+steer_pat = re.compile(r"taste[^.\n]{0,120}\b(so|therefore|should|must|need to|don't|do not|instead|avoid|skip|never|not |before|gate|first)\b", re.I)
+push_pat = re.compile(r"\b(unacceptable|add (that|it) back|wrong|revert|undo|that'?s not|you can'?t just|not what i|why did you|i said|stop doing)\b", re.I)
+sessions = []; acts = []; learn_events = []; steer_quotes = []; tps_samples = []; skill_events = []
+for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
+    if f.endswith("checkpoints.jsonl"): continue
+    sid = os.path.basename(f)[:8]
+    meta = {}
+    mf = f.replace(".jsonl", ".meta.json")
+    if os.path.exists(mf): meta = json.load(open(mf))
+    S = dict(sid=sid, title=redact(meta.get("title") or ""), asst=0, user=0, cites=0, steer=0, inp=0, out=0, cr=0, cw=0, cost=0.0,
+             models=collections.Counter(), tools=collections.Counter(), first=None, last=None, first_in=None, prompts=[], push=0,
+             push_after_cite=0, push_after_nocite=0, turns_cite=0, turns_nocite=0, think_chars=0, bullets_hit=collections.Counter(), pm=collections.defaultdict(collections.Counter), skills=collections.Counter())
+    last_turn_cited = False
+    tool_names = {}; prev_time = None
+    def _ts(t):
+        try: return datetime.datetime.fromisoformat(t.rstrip("Z"))
+        except Exception: return None
+    for line in open(f, errors="ignore"):
+        try: o = json.loads(line)
+        except Exception: continue
+        if o.get("type") != "message": continue
+        m = o.get("message", {}); ts = o.get("timestamp") or ""
+        S["first"] = S["first"] or ts; S["last"] = ts
+        _ca = (m.get("meta") or {}).get("createdAt")
+        rec_time = datetime.datetime.fromtimestamp(_ca / 1000, datetime.timezone.utc).replace(tzinfo=None) if (_ca and m.get("role") == "user") else _ts(ts)
+
+        if m.get("role") == "assistant":
+            mdl = o.get("model") or meta.get("model") or "?"
+            S["asst"] += 1; S["models"][mdl] += 1
+            u = o.get("usage") or {}
+            ca = (m.get("meta") or {}).get("createdAt")
+            if ca and prev_time and u.get("outputTokens", 0) > 0:
+                dur = (datetime.datetime.fromtimestamp(ca / 1000, datetime.timezone.utc).replace(tzinfo=None) - prev_time).total_seconds()
+                if 0.3 < dur < 1800:
+                    PMx = S["pm"][mdl]; PMx["secs"] += dur; PMx["out_timed"] += u["outputTokens"]; PMx["timed"] += 1
+                    tps_samples.append((mdl, u["outputTokens"] / dur))
+            PM = S["pm"][mdl]; PM["asst"] += 1; PM["inp"] += u.get("inputTokens", 0); PM["out"] += u.get("outputTokens", 0); PM["cr"] += u.get("cacheReadTokens", 0); PM["cost"] += u.get("costUsd", 0) or 0
+            S["inp"] += u.get("inputTokens", 0); S["out"] += u.get("outputTokens", 0)
+            S["cr"] += u.get("cacheReadTokens", 0); S["cw"] += u.get("cacheWriteTokens", 0); S["cost"] += u.get("costUsd", 0) or 0
+            if S["first_in"] is None and u.get("inputTokens"): S["first_in"] = u["inputTokens"]
+            cited_here = False
+            for c in m.get("content", []):
+                if c.get("type") == "tool_use":
+                    S["tools"][c.get("name")] += 1; tool_names[c.get("id")] = c.get("name")
+                    if c.get("name") == "activate_skill":
+                        S["skills"][(c.get("input") or {}).get("name") or "(unnamed)"] += 1; skill_events.append(dict(sid=sid, date=ts[:10], skill=(c.get("input") or {}).get("name") or "(unnamed)", turn=S["asst"]))
+                if c.get("type") == "thinking":
+                    th = c.get("thinking", ""); S["think_chars"] += len(th); PM["think"] += len(th)
+                    if cite_pat.search(th):
+                        S["cites"] += 1; cited_here = True; PM["cites"] += 1
+                        steer = bool(steer_pat.search(th)); S["steer"] += steer; PM["steer"] += steer
+                        # attribute to bullets: look at windows around 'taste'
+                        for mm in re.finditer(r"taste", th, re.I):
+                            win = th[max(0, mm.start() - 300): mm.end() + 300].lower()
+                            wt = set(WORD.findall(win))
+                            best = max(range(len(rows)), key=lambda k: len(brare[k] & wt))
+                            sc = len(brare[best] & wt)
+                            if sc >= 2:
+                                acts.append(dict(sid=sid, date=ts[:10], b=best, steer=steer, turn=S["asst"], model=mdl))
+                                S["bullets_hit"][best] += 1
+                                if steer and len(steer_quotes) < 400:
+                                    q = th[max(0, mm.start() - 160): mm.end() + 220].replace("\n", " ")
+                                    steer_quotes.append((ts[:10], sid, best, redact(q)))
+            if cited_here: S["turns_cite"] += 1
+            else: S["turns_nocite"] += 1
+            last_turn_cited = cited_here
+            prev_time = rec_time
+        elif m.get("role") == "user":
+            for c in m.get("content", []):
+                if c.get("type") == "text":
+                    t = c.get("text", ""); S["user"] += 1
+                    S["prompts"].append((ts, redact(t)))
+                    if not t.lstrip().startswith("Error:") and push_pat.search(t[:200]):
+                        S["push"] += 1
+                        if last_turn_cited: S["push_after_cite"] += 1
+                        else: S["push_after_nocite"] += 1
+                if c.get("type") == "tool_result" and "learning your preference in the background" in json.dumps(c.get("content")):
+                    learn_events.append((ts[:10], sid))
+            prev_time = rec_time
+    if S["asst"] == 0: continue
+    S["date"] = (S["first"] or "")[:10]
+    S["model"] = S["models"].most_common(1)[0][0] if S["models"] else "?"
+    try:
+        S["minutes"] = round((datetime.datetime.fromisoformat(S["last"].rstrip("Z")) - datetime.datetime.fromisoformat(S["first"].rstrip("Z"))).total_seconds() / 60)
+    except Exception: S["minutes"] = 0
+    sessions.append(S)
+sessions.sort(key=lambda s: s["date"])
+cfg = json.load(open(CFG))["tasteOnboarding"] if os.path.exists(CFG) else {}
+learned = {k: len(v) for k, v in cfg.get("learnedSessions", {}).items()}
+skipped = {k: len(v) for k, v in cfg.get("skippedSessions", {}).items()}
+hist = []
+if os.path.exists(f"{CC_HOME}/history.jsonl"):
+    for l in open(f"{CC_HOME}/history.jsonl", errors="ignore"):
+        try: hist.append(json.loads(l))
+        except Exception: pass
+n_filehist = len(glob.glob(f"{CC_HOME}/file-history/*/*"))
+
+# ---------------- bullet dates (match to learned-from sessions, else interpolate) ----------------
+cand = []
+for i in cfg.get("learnedSessions", {}).get("claude-code", []):
+    cand += glob.glob(f"{HOME}/.claude/projects/*/{i}.jsonl")
+cand += [f for f in glob.glob(f"{SESS}/*.jsonl") if not f.endswith("checkpoints.jsonl")]
+docs = {}
+for f in cand:
+    try: txt = open(f, errors="ignore").read().lower()
+    except Exception: continue
+    m = re.search(r'"timestamp":"(\d{4}-\d{2}-\d{2})', txt)
+    docs[f] = (m.group(1) if m else datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat(), set(WORD.findall(txt)))
+df = collections.Counter(w for _, (_, ws) in docs.items() for w in ws); N = max(1, len(docs))
+for k, r in enumerate(rows):
+    rare = {t for t in btoks[k] if df.get(t) and df[t] <= max(3, 0.3 * N)}
+    best = None
+    for f, (date, ws) in docs.items():
+        sc = len(rare & ws)
+        if sc and (best is None or sc > best[0] or (sc == best[0] and date < best[1])): best = (sc, date, f)
+    ok = best and best[0] >= 3 and best[0] >= 0.25 * max(1, len(rare))
+    r["date"] = best[1] if ok else None
+    r["interp"] = r["date"] is None
+    if ok:
+        bf = best[2]
+        if "/.claude/" in bf: r["src"] = "Claude Code"
+        else:
+            mf = bf.replace(".jsonl", ".meta.json"); mm = json.load(open(mf)).get("model") if os.path.exists(mf) else None
+            if not mm:
+                mm_ = re.search(r'"model":"([^"]+)"', open(bf, errors="ignore").read()); mm = mm_.group(1) if mm_ else "?"
+            r["src"] = f"cmd · {mm}"
+    else: r["src"] = "unmatched (Cursor or unseen)"
+idx_d = [k for k, r in enumerate(rows) if r["date"]]
+for k, r in enumerate(rows):
+    if r["date"] or not idx_d: continue
+    p = bisect.bisect_left(idx_d, k); lo = idx_d[p - 1] if p else None; hi = idx_d[p] if p < len(idx_d) else None
+    D = lambda j: datetime.date.fromisoformat(rows[j]["date"])
+    if lo is not None and hi is not None: d = D(lo) + datetime.timedelta(days=round((D(hi) - D(lo)).days * (k - lo) / (hi - lo)))
+    else: d = D(lo if lo is not None else hi)
+    r["date"] = d.isoformat()
+for r in rows: r["date"] = r["date"] or datetime.date.today().isoformat()
+
+# ---------------- svg helpers (all attributes quoted) ----------------
+def svg_open(w, h, extra=""): return f"<svg class='chart' viewBox='0 0 {w} {h}' width='100%' preserveAspectRatio='xMidYMin meet' style='max-width:{w}px;{extra}'>"
+def T(x, y, s, size=11, weight="normal", anchor="start", fill="var(--fg)", rot=None):
+    tr = f" transform='rotate(-90 {x} {y})'" if rot else ""
+    return f"<text x='{x:.0f}' y='{y:.0f}' text-anchor='{anchor}' fill='{fill}' style='font-size:{size}px;font-weight:{weight}'{tr}>{esc(s)}</text>"
+def L(x1, y1, x2, y2, c="var(--axis)", w=1.5): return f"<line x1='{x1:.0f}' y1='{y1:.0f}' x2='{x2:.0f}' y2='{y2:.0f}' stroke='{c}' stroke-width='{w}'/>"
+def R(x, y, w, h, c, title="", op=.9): return f"<rect x='{x:.0f}' y='{y:.0f}' width='{max(0,w):.0f}' height='{h:.0f}' fill='{c}' opacity='{op}'><title>{esc(title)}</title></rect>"
+def title_block(w, t, sub=None):
+    s = T(w / 2, 24, t, 16 if len(t) * 9 < w - 40 else 13, "bold", "middle")
+    if sub: s += T(w / 2, 44, sub, 12, fill="var(--muted)", anchor="middle")
+    return s
+
+def hbars(title, items, xlabel, sub=None, w=900, color="var(--bar)", ylabel=None, lw=250, sort=True):
+    """items: [(label, value, hover)]"""
+    if sort: items = sorted(items, key=lambda x: -x[1])
+    rh, L0, top = 30, lw, 70
+    h = top + rh * len(items) + 60; mx = max([v for _, v, _ in items] + [1])
+    xs = lambda v: L0 + v / mx * (w - L0 - 60)
+    out = [svg_open(w, h), title_block(w, title, sub)]
+    step = max(1, math.ceil(mx / 8))
+    for v in range(0, int(mx) + step, step):
+        out.append(L(xs(v), top - 6, xs(v), top + rh * len(items), "var(--grid)", 1)); out.append(T(xs(v), top + rh * len(items) + 18, fmt(v), anchor="middle"))
+    for k, (lab, v, hov) in enumerate(items):
+        y = top + k * rh
+        maxc = max(6, int((L0 - 34) / 7.2)); full = str(lab)
+        lab = full if len(full) <= maxc else full[:maxc - 1] + "…"
+        lt = T(L0 - 10, y + rh / 2 + 5, lab, 13, "600", "end")
+        if hov or lab != full: lt = lt.replace(">" + esc(lab) + "</text>", f"><title>{esc(hov or full)}</title>{esc(lab)}</text>")
+        out.append(lt); out.append(R(xs(0), y + 5, xs(v) - xs(0), rh - 10, color, hov or lab))
+        out.append(T(xs(v) + 8, y + rh / 2 + 5, fmt(v) if isinstance(v, int) or float(v).is_integer() else f"{v:.2f}".rstrip("0").rstrip("."), 12, "600", fill="var(--muted)"))
+    out.append(L(L0, top - 6, L0, top + rh * len(items))); out.append(L(L0, top + rh * len(items), w - 60, top + rh * len(items)))
+    out.append(T((L0 + w - 60) / 2, h - 12, xlabel, 13, "bold", "middle"))
+    if ylabel: out.append(T(14, (top + rh * len(items)) / 2, ylabel, 13, "bold", "middle", rot=True))
+    return "".join(out) + "</svg>"
+
+def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900):
+    """rowsx: [(label, {series: value})]"""
+    rh, L0, top = 36, (215 if w >= 800 else 190), 70
+    h = top + rh * len(rowsx) + 64; mx = max([sum(d.values()) for _, d in rowsx] + [1])
+    xs = lambda v: L0 + v / mx * (w - L0 - 40)
+    out = [svg_open(w, h), title_block(w, title, sub)]
+    for v in range(0, int(mx) + 1, max(1, math.ceil(mx / 9))):
+        out.append(L(xs(v), top - 8, xs(v), top + rh * len(rowsx), "var(--grid)", 1)); out.append(T(xs(v), top + rh * len(rowsx) + 18, v, 12, anchor="middle"))
+    for k, (lab, d) in enumerate(rowsx):
+        y = top + k * rh; x = 0
+        maxc = max(6, int((L0 - 34) / 7.2)); full = str(lab); lab = full if len(full) <= maxc else full[:maxc - 1] + "…"
+        out.append(T(L0 - 10, y + rh / 2 + 5, lab, 13, "600", "end").replace(">" + esc(lab) + "</text>", f"><title>{esc(full)}</title>{esc(lab)}</text>"))
+        for sname in series:
+            v = d.get(sname, 0)
+            if not v: continue
+            x0, x1 = xs(x), xs(x + v)
+            out.append(R(x0, y + 5, x1 - x0, rh - 10, colmap[sname], f"{lab} × {sname}: {v}"))
+            if x1 - x0 > 18: out.append(T((x0 + x1) / 2, y + rh / 2 + 5, v, 12, "bold", "middle", "var(--onbar)"))
+            x += v
+        out.append(T(xs(x) + 8, y + rh / 2 + 5, x, 12, "600", fill="var(--muted)"))
+    out.append(L(L0, top - 8, L0, top + rh * len(rowsx))); out.append(L(L0, top + rh * len(rowsx), w - 40, top + rh * len(rowsx)))
+    out.append(T((L0 + w - 40) / 2, h - 12, xlabel, 13, "bold", "middle")); out.append(T(14, (top + rh * len(rowsx)) / 2, ylabel, 13, "bold", "middle", rot=True))
+    return "".join(out) + "</svg>"
+
+def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=360):
+    """cats: [(label, {series: value})] vertical stacked columns"""
+    L0, top, B = 70, 70, 70; mx = max([sum(d.values()) for _, d in cats] + [1])
+    cw = (w - L0 - 30) / max(1, len(cats)); ys = lambda v: top + (1 - v / mx) * (h - top - B)
+    out = [svg_open(w, h), title_block(w, title, sub)]
+    for v in range(0, int(mx) + 1, max(1, math.ceil(mx / 6))):
+        out.append(L(L0, ys(v), w - 30, ys(v), "var(--grid)", 1)); out.append(T(L0 - 8, ys(v) + 4, v, 12, anchor="end"))
+    for k, (lab, d) in enumerate(cats):
+        x = L0 + k * cw + cw * 0.15; acc = 0
+        for sname in series:
+            v = d.get(sname, 0)
+            if not v: continue
+            out.append(R(x, ys(acc + v), cw * 0.7, ys(acc) - ys(acc + v), colmap[sname], f"{lab} · {sname}: {v}")); acc += v
+        if len(cats) > 8: out.append(f"<text x='{x + cw * 0.35:.0f}' y='{h - B + 8:.0f}' text-anchor='end' fill='var(--fg)' style='font-size:10px' transform='rotate(-45 {x + cw * 0.35:.0f} {h - B + 8:.0f})'>{esc(lab)}</text>")
+        else: out.append(T(x + cw * 0.35, h - B + 16, lab, 11, anchor="middle"))
+    out.append(L(L0, top - 6, L0, h - B)); out.append(L(L0, h - B, w - 30, h - B))
+    out.append(T((L0 + w - 30) / 2, h - 12, xlabel, 13, "bold", "middle")); out.append(T(16, (top + h - B) / 2, ylabel, 13, "bold", "middle", rot=True))
+    return "".join(out) + "</svg>"
+
+def legend(colmap, header, counts=None):
+    return f"<div class=legend><b>{esc(header)}</b>" + "".join(f"<div><span class=dot style='background:{c}'></span> {esc(k)}" + (f" <span class=muted>({counts[k]})</span>" if counts and k in counts else "") + "</div>" for k, c in colmap.items()) + "</div>"
+def tip(t): return f"<span class=tip tabindex=0 data-tip='{esc(t)}'>?</span>"
+def kpi(items):
+    return "<div class=kpi>" + "".join(f"<div><b>{v}</b>{esc(k)}{tip(tp) if tp else ''}</div>" for k, v, tp in items) + "</div>"
+def flex(chart, leg): return f"<div class=flex>{chart}{leg}</div>"
+def two(*items): return "<div class=two>" + "".join(f"<div class=cell>{it}</div>" for it in items) + "</div>"
+def table(headers, body_rows, cls="sortable"):
+    return f"<table class='{cls}'><tr>" + "".join(f"<th{' class=num' if h.startswith('#') else ''}>{esc(h.lstrip('#'))}</th>" for h in headers) + "</tr>" + "".join("<tr>" + "".join(f"<td{' class=num' if isinstance(v,(int,float)) else ''}>{v if isinstance(v,str) and v.startswith('<') else (fmt(v) if isinstance(v,int) and abs(v) >= 1000 else esc(v))}</td>" for v in r) + "</tr>" for r in body_rows) + "</table>"
+def fmt(n):
+    if not isinstance(n, (int, float)): return str(n)
+    a = abs(n)
+    if a >= 1e6: return f"{n/1e6:.1f}M"
+    if a >= 1e3: return f"{n/1e3:.1f}k"
+    return f"{n:.0f}" if float(n).is_integer() else f"{n:.2f}"
+
+# ---------------- page ----------------
+H = ["""<!doctype html><html lang="en" data-theme="dark"><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Command Code dashboard</title><style>
+:root{--font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+[data-theme=dark]{--bg:#0b0e13;--surface:#12161d;--surface2:#181d26;--border:rgba(255,255,255,.08);--fg:#e8ebf0;--muted:#8b93a3;--grid:rgba(255,255,255,.07);--axis:rgba(255,255,255,.35);--bar:#c9d1dc;--bar2:#4a5262;--onbar:#0b0e13;--accent:#5b9cf6;--accent-fg:#0b0e13;--shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.35)}
+[data-theme=light]{--bg:#f6f7f9;--surface:#ffffff;--surface2:#f1f3f6;--border:rgba(15,23,42,.10);--fg:#0f172a;--muted:#5b6472;--grid:rgba(15,23,42,.07);--axis:rgba(15,23,42,.45);--bar:#1f2937;--bar2:#b9c0cc;--onbar:#ffffff;--accent:#2563eb;--accent-fg:#fff;--shadow:0 1px 2px rgba(15,23,42,.06)}
+*{box-sizing:border-box}html{background:var(--bg)}body{font:14px/1.5 var(--font);color:var(--fg);background:var(--bg);max-width:1240px;margin:0 auto;padding:28px 24px 80px;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+a{color:var(--accent)}code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 5px;border-radius:4px}
+h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 4px}h2{font-size:16px;margin:32px 0 10px}h3{font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:28px 0 10px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 16px}.muted{color:var(--muted)}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:8px 0 4px}
+.seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:2px}.seg button{border:0;background:transparent;color:var(--muted);padding:6px 12px;border-radius:6px;font:inherit;font-size:13px;cursor:pointer}.seg button.on{background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
+.tabs{display:flex;gap:2px;position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border)}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tab{display:none}.tab.on{display:block}.tabdesc{color:var(--muted);margin:14px 0 18px;font-size:14px}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 16px}.kpi div{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow)}.kpi div{font-size:12px;color:var(--muted);letter-spacing:.02em}.kpi b{display:block;font-size:24px;font-weight:600;color:var(--fg);letter-spacing:-.01em;margin-bottom:2px}
+.card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0 0 16px;color:var(--fg)}
+.chart{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin:12px 0;display:block;width:100%}.two .cell>.chart,.two .cell>.flex>.chart{height:100%;min-height:0}svg text{font-family:var(--font)}
+.flex{display:flex;gap:16px;align-items:flex-start}.legend{flex:0 0 220px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:13px;margin-top:12px}.legend b{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase}.legend div{margin:8px 0}
+.dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:6px;vertical-align:middle}
+table{border-collapse:collapse;width:100%;margin:8px 0 16px;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;font-size:13px}th{background:var(--surface2);color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.05em;text-transform:uppercase;text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}tr:last-child td{border-bottom:0}tr:hover td{background:var(--surface2)}.num{text-align:right}
+.tf{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}.tf button{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:999px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}.tf button:hover{color:var(--fg)}
+details summary{cursor:pointer;color:var(--accent)}blockquote{margin:8px 0;padding:8px 12px;border-left:2px solid var(--border);background:var(--surface);border-radius:0 8px 8px 0;color:var(--muted);font-size:13px}blockquote b{color:var(--fg)}
+.grid2,.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch}.two .cell{display:flex;flex-direction:column;min-width:0}.two .cell>.chart,.two .cell>.flex{flex:1 1 auto}.two .cell>.flex>.chart{flex:1 1 auto;height:auto}.two .cell>.chart{height:auto}.two .cell>table{flex:1 1 auto;margin-top:12px}.chart{max-width:100%!important}.two .flex{flex-direction:column;gap:0}.two .legend{flex:none;width:100%;margin-top:-4px;border-radius:0 0 12px 12px;border-top:0;padding:8px 14px}.two .legend b{margin-right:12px}.two .legend div{display:inline-block;margin:4px 14px 4px 0}.two .flex .chart{margin-bottom:0;border-radius:12px 12px 0 0}.cell>.chart:first-child,.cell>.flex:first-child>.chart{margin-top:0}.cell>.flex:first-child{margin-top:12px}.full{grid-column:1/-1}@media(max-width:900px){.grid2,.two{grid-template-columns:1fr}.flex{flex-direction:column}.legend{flex:none}}
+ul{padding-left:18px}li{margin:3px 0}
+.tip{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:8px;border:1px solid var(--border);color:var(--muted);font-size:10px;margin-left:6px;cursor:help;position:relative;vertical-align:middle}.tip:hover::after,.tip:focus::after{content:attr(data-tip);position:absolute;left:50%;bottom:22px;transform:translateX(-50%);width:280px;background:var(--surface2);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;font-weight:400;text-align:left;white-space:normal;z-index:20;box-shadow:var(--shadow)}.kpi div .tip{float:right}.charttip{margin:-6px 0 10px;font-size:12px;color:var(--muted)}
+.filters{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}.filters label{font-size:12px;color:var(--muted)}.filters select,.filters input{margin-left:6px;background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font:inherit;font-size:13px}.pager{display:flex;gap:12px;align-items:center;margin:4px 0 16px}.pager button{background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font:inherit;cursor:pointer}.pager button:disabled{opacity:.4;cursor:default}
+table.sortable th,#bt-all th,#bt-30d th{cursor:pointer;user-select:none}th.asc::after{content:' ▲';font-size:9px}th.desc::after{content:' ▼';font-size:9px}
+</style>"""]
+
+ROWS_ALL = rows
+def build(SUF, rows, sessions, acts):
+    H = []
+    dc_all = collections.Counter(r["domain"] for r in rows)
+    KEEP = {d for d, _ in dc_all.most_common(3)}
+    rows_main = [r for r in rows if r["domain"] in KEEP]
+    tc = collections.Counter(t for r in rows_main for t in r["traits"])
+    dc = collections.Counter(r["domain"] for r in rows_main)
+    tl = [t for t, _, _ in sorted(TRAITS, key=lambda x: -tc.get(x[0], 0))]
+    dl = [d for d, _ in dc.most_common()]
+    PAL = ["#3ecf8e", "#5b9cf6", "#f5a524", "#ef6b6b", "#a78bfa", "#e879a8", "#22c9d6", "#c8d64b", "#9aa3b2"]
+    cols = {d: PAL[i] for i, d in enumerate(dl)}
+
+    # ---------------- activation aggregates ----------------
+    act_by_b = collections.Counter(a["b"] for a in acts)
+    steer_by_b = collections.Counter(a["b"] for a in acts if a["steer"])
+    act_by_trait = collections.Counter(t for a in acts for t in ROWS_ALL[a["b"]]["traits"])
+    act_by_domain = collections.Counter(ROWS_ALL[a["b"]]["domain"] for a in acts)
+    act_by_day = collections.Counter(a["date"] for a in acts)
+    never = [r for r in rows if act_by_b[r["i"] - 1] == 0]
+    for r in rows: r["acts"] = act_by_b[r["i"] - 1]; r["steers"] = steer_by_b[r["i"] - 1]
+
+
+    TABS = [("Overview", "The key picture across every tab"), ("Taste", "What the file says about you"), ("Influence", "When taste steps in and which parts"), ("Models", "Which models ran and how taste behaves on each"), ("Usage", "How you use cmd: sessions, tools, prompts"), ("Health", "Is the taste file in good shape")]
+    cur = [None]
+    def tab(name):
+        if cur[0]: H.append("</div>")
+        cur[0] = name; desc = dict(TABS)[name]
+        H.append(f"<div class=tab id='tab-{name}{SUF}'><p class=tabdesc>{esc(desc)}.</p>")
+    def h3(t): H.append(f"<h3>{esc(t)}</h3>")
+    tot_cost = sum(s["cost"] for s in sessions); tot_in = sum(s["inp"] for s in sessions); tot_cr = sum(s["cr"] for s in sessions); tot_out = sum(s["out"] for s in sessions)
+    est_tokens = len(raw) // 4; TOK_NOTE = "estimated as bytes ÷ 4, about ±20%"
+    latest_in = next((s["first_in"] for s in reversed(sessions) if s["first_in"]), 1)
+    n_steer = sum(1 for a in acts if a["steer"])
+    OV = {}
+    pm = collections.defaultdict(collections.Counter)
+    for s in sessions:
+        for m, c in s["pm"].items(): pm[m].update(c)
+    ml = sorted(pm, key=lambda m: -pm[m]["asst"]); mcols = {m: PAL[i % len(PAL)] for i, m in enumerate(ml)}
+
+    # ================= TASTE =================
+    tab("Taste")
+    H.append(kpi([("bullets", len(rows), "One bullet = one learned preference or fact, stored as a line in taste.md."), ("share of every prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "The taste file is pasted into the system prompt on every request. This is how much of the first-turn prompt it takes up."), ("work areas", len(dc), "Which part of your work a bullet is about, assigned by keywords."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each bullet. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
+    H.append(f"<div class=card><b>How taste reaches the model.</b> The whole file ({fmt(est_tokens)} tokens, {TOK_NOTE}) is pasted into the system prompt on every request, framed as requirements. Latest first turn was {fmt(latest_in)} tokens.</div>")
+    grid = [(t, {d: sum(1 for r in rows_main if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl]
+    habits_chart = flex(stacked_h("Work habits by work area", grid, dl, cols, "Number of bullets", "Work habit", "Each bar is one habit. Colors show which work area the bullets came from.", w=620), legend(cols, "Work area", dc))
+    habit_defs = "<p class=muted>A bullet can show more than one habit." + (f" Too small to chart: {', '.join(f'{d} ({k})' for d, k in dc_all.items() if d not in KEEP)}." if len(dc_all) > len(dc) else "") + "</p><ul>" + "".join(f"<li><b>{t}</b>: {d}</li>" for t, d, _ in TRAITS) + "</ul>"
+    d0 = min(datetime.date.fromisoformat(r["date"]) for r in rows); d1 = max(datetime.date.fromisoformat(r["date"]) for r in rows); span = max(1, (d1 - d0).days)
+    H.append(two(habits_chart, habit_defs)); OV["habits"] = habits_chart
+    h3("Where the bullets came from")
+    srcs = collections.Counter(r["src"] for r in rows); sl = [k for k, _ in srcs.most_common()]; scols = {k: PAL[i % len(PAL)] for i, k in enumerate(sl)}
+    weeks_b = collections.OrderedDict()
+    for r in sorted(rows, key=lambda r: r["date"]):
+        wk = (datetime.date.fromisoformat(r["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(r["date"]).weekday())).isoformat()
+        weeks_b.setdefault(wk, collections.Counter())[r["src"]] += 1
+    H.append("<p class=charttip>Each bullet is matched to the session it was most likely learned from by shared distinctive words. Claude Code sessions are read from disk; cmd sessions carry the model that was running. Cursor transcripts are not readable locally, so bullets learned there show as unmatched.</p>")
+    H.append(two(hbars("Bullets by source", [(k, v, "") for k, v in srcs.items()], "Bullets", ylabel="Source", w=620, lw=230),
+                 flex(stacked_v("Bullets learned per week, by source", [(wk[5:], dict(c)) for wk, c in weeks_b.items()], sl, scols, "Week starting", "Bullets", w=620, h=380), legend(scols, "Source", srcs))))
+    h3("All bullets")
+    H.append("<p class=muted>Activations = times matched in the model's thinking; steering = of those, changed the plan. Click a column header to sort.</p>")
+    bdata = [dict(i=r["i"], area=r["domain"], habits=r["traits"], conf=r["conf"], date=r["date"], src=r["src"], acts=r["acts"], steers=r["steers"], text=r["text"]) for r in rows]
+    areas = sorted(set(r["domain"] for r in rows)); habs = [t for t, _, _ in TRAITS]
+    H.append(f"<div class=filters id='bf{SUF}'><label>Area <select data-k='area'><option value=''>all</option>" + "".join(f"<option>{esc(a)}</option>" for a in areas) + "</select></label>"
+             "<label>Habit <select data-k='habit'><option value=''>all</option>" + "".join(f"<option>{esc(t)}</option>" for t in habs) + "</select></label>"
+             f"<label>From <input type=date data-k='from' value='{d0}'></label><label>To <input type=date data-k='to' value='{d1}'></label>"
+             "<label>Search <input type=search data-k='q' placeholder='text…'></label><span class=muted data-k='count'></span></div>")
+    H.append(f"<div id='bt{SUF}'></div><div class=pager id='bp{SUF}'></div>")
+    H.append("<script>(function(){const D=" + json.dumps(bdata) + ";const S='" + SUF + "';const f=document.getElementById('bf'+S),t=document.getElementById('bt'+S),p=document.getElementById('bp'+S);"
+             "const st={area:'',habit:'',from:f.querySelector('[data-k=from]').value,to:f.querySelector('[data-k=to]').value,q:'',sort:'date',asc:false,page:0,size:25};"
+             "const cols=[['i','#'],['area','Area'],['habits','Habits'],['conf','Conf'],['date','Date'],['src','Source'],['acts','Activations'],['steers','Steering'],['text','Text']];"
+             "function rows(){return D.filter(r=>(!st.area||r.area===st.area)&&(!st.habit||r.habits.includes(st.habit))&&r.date>=st.from&&r.date<=st.to&&(!st.q||r.text.toLowerCase().includes(st.q))).sort((a,b)=>{let x=a[st.sort],y=b[st.sort];if(Array.isArray(x)){x=x.join();y=y.join()}if(x<y)return st.asc?-1:1;if(x>y)return st.asc?1:-1;return a.i-b.i;});}"
+             "function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}"
+             "function render(){const R=rows();const n=Math.max(1,Math.ceil(R.length/st.size));st.page=Math.min(st.page,n-1);const P=R.slice(st.page*st.size,(st.page+1)*st.size);"
+             "t.innerHTML='<table><tr>'+cols.map(([k,l])=>`<th data-k='${k}' class='${['i','conf','acts','steers'].includes(k)?'num':''} ${st.sort===k?(st.asc?'asc':'desc'):''}'>${l}</th>`).join('')+'</tr>'+P.map(r=>`<tr><td class=num>${r.i}</td><td>${esc(r.area)}</td><td>${esc(r.habits.join(', ')||'—')}</td><td class=num>${r.conf.toFixed(2)}</td><td>${r.date}</td><td>${esc(r.src)}</td><td class=num>${r.acts}</td><td class=num>${r.steers}</td><td>${esc(r.text)}</td></tr>`).join('')+'</table>';"
+             "t.querySelectorAll('th').forEach(h=>h.onclick=()=>{const k=h.dataset.k;if(st.sort===k)st.asc=!st.asc;else{st.sort=k;st.asc=k==='text'||k==='area'||k==='habits';}render();});"
+             "f.querySelector('[data-k=count]').textContent=R.length+' bullets';p.innerHTML=`<button ${st.page===0?'disabled':''} data-d='-1'>‹ Prev</button><span>Page ${st.page+1} of ${n}</span><button ${st.page>=n-1?'disabled':''} data-d='1'>Next ›</button>`;p.querySelectorAll('button').forEach(b=>b.onclick=()=>{st.page+=+b.dataset.d;render();});}"
+             "f.querySelectorAll('select,input').forEach(el=>el.oninput=()=>{st[el.dataset.k]=el.dataset.k==='q'?el.value.toLowerCase():el.value;st.page=0;render();});render();})();</script>")
+
+    # ================= INFLUENCE =================
+    tab("Influence")
+    H.append(kpi([("activations", len(acts), "Moments where the model's reasoning mentioned taste and could be matched to one specific bullet."), ("steering", n_steer, "Activations where the sentence went on to change the plan: so, should, instead, before, never."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of all activations, the share that changed what the model did next."), ("turns that consulted taste", f"{100*sum(s['turns_cite'] for s in sessions)/max(1,sum(s['asst'] for s in sessions)):.1f}%", "Share of all assistant turns whose reasoning mentioned taste at all."), ("bullets ever activated", len(rows) - len(never), "Bullets referenced at least once in any recorded reasoning."), ("bullets never activated", len(never), "Bullets that sit in every prompt but were never referenced. Candidates to trim."), ("skill invocations", sum(1 for e in skill_events if e["sid"] in {s["sid"] for s in sessions}), "Explicit activate_skill calls, for comparison with implicit taste use.")]))
+    H.append("<div class=card>An <b>activation</b> is a thinking block that mentions taste and can be matched to one bullet by shared distinctive words. A <b>steering</b> activation is one where the sentence goes on to change the plan (so / should / instead / before / never). Counts are approximate and show when the file is consulted, not whether the output was better.</div>")
+    hb = [(t, {"steering": sum(1 for a in acts if a["steer"] and t in ROWS_ALL[a["b"]]["traits"]), "mention": sum(1 for a in acts if not a["steer"] and t in ROWS_ALL[a["b"]]["traits"])}) for t in tl]
+    c1 = flex(stacked_h("Activations by work habit", hb, ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Activations", "Work habit", "Dark = the thought changed the plan. Light = taste was only mentioned.", w=620), legend({"steering": "var(--bar)", "mention": "var(--bar2)"}, "Kind"))
+    tot_t = sum(tc.values()) or 1; tot_a = sum(act_by_trait.values()) or 1
+    c2 = (hbars("How hard each habit's bullets work", [(t, round(act_by_trait.get(t, 0) / max(1, tc.get(t, 0)), 1), f"{act_by_trait.get(t,0)} activations across {tc.get(t,0)} bullets") for t in tl], "Activations per bullet", "Average times a bullet of this habit was consulted. Low = dead weight in the prompt.", ylabel="Work habit", w=620, lw=190))
+    H.append(two(c1, c2)); OV["infl"] = c1; OV["work"] = c2
+    top_b = sorted(rows, key=lambda r: -r["acts"])[:15]
+    c3 = hbars("Most activated bullets", [(f"#{r['i']} " + r["text"][:28] + "…", r["acts"], r["text"]) for r in top_b], "Activations", "Hover a bar for the full bullet", ylabel="Bullet", lw=260, w=620)
+    days = sorted(set(a["date"] for a in acts))
+    c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
+    H.append(two(c3, c4))
+    pc = sum(s["push_after_cite"] for s in sessions); pn = sum(s["push_after_nocite"] for s in sessions); tcn = sum(s["turns_cite"] for s in sessions); tnn = sum(s["turns_nocite"] for s in sessions)
+    h3("Does the user push back less after taste-guided turns?")
+    H.append(table(["Preceding assistant turn", "#Turns", "#User pushbacks after", "#Pushback rate %"], [("consulted taste", tcn, pc, round(100 * pc / max(1, tcn), 2)), ("did not", tnn, pn, round(100 * pn / max(1, tnn), 2))]))
+    H.append(f"<p class=muted>Pushback = a user message containing unacceptable / wrong / revert / that's not / why did you. Only {sum(s['user'] for s in sessions)} user prompts exist, so this is a weak hint, and the only outcome-like signal on disk.</p>")
+    h3("Skills alongside taste")
+    sk = collections.Counter(e["skill"] for e in skill_events if e["sid"] in {s["sid"] for s in sessions})
+    H.append("<p class=charttip>Skills are explicit playbooks the agent loads with activate_skill; taste is implicit and always present. Comparing the two shows whether sessions lean on named procedures, on learned preferences, or both.</p>")
+    if sk:
+        sk_rows = [(s["date"], f"{s['sid']} {s['title']}", s["model"][:24], ", ".join(f"{k}×{v}" if v > 1 else k for k, v in s["skills"].most_common()) or "—", sum(s["skills"].values()), s["cites"], s["steer"]) for s in sessions if s["skills"] or s["cites"]]
+        H.append(two(hbars("Skill invocations", [(k, v, "") for k, v in sk.items()], "Invocations", f"{sum(sk.values())} invocations across {sum(1 for s in sessions if s['skills'])} sessions", ylabel="Skill", w=620, lw=230),
+                     table(["Date", "Session", "Model", "Skills used", "#Skill calls", "#Taste activations", "#Steering"], sk_rows)))
+    else: H.append("<p class=muted>No skill invocations in this range.</p>")
+    h3("What steering looks like"); H.append("<details><summary>Show up to 25 steering moments</summary>")
+    for dd, sid, b, q in steer_quotes[:25]: H.append(f"<blockquote><b>{dd} · {sid} · bullet #{b+1}</b><br>{esc(q)}</blockquote>")
+    H.append("</details>")
+    if learn_events: H.append(f"<p><b>In-session learn events</b> (the agent called the taste tool): {', '.join(f'{d} ({s})' for d, s in learn_events)}.</p>")
+
+    # ================= MODELS =================
+    tab("Models")
+    ma = collections.Counter(a["model"] for a in acts); ms = collections.Counter(a["model"] for a in acts if a["steer"])
+    def med(xs): xs = sorted(xs); return xs[len(xs)//2] if xs else 0
+    tps_med = {m: med([v for mm, v in tps_samples if mm == m]) for m in ml}
+    H.append(kpi([("models used", len(ml), "Distinct models that produced at least one assistant turn."), ("output tok/s (median)", round(med([v for _, v in tps_samples]), 1), "Output tokens divided by turn duration, median across all timed turns. Network latency is still inside the clock."), ("output tok/turn", fmt(round(tot_out / max(1, sum(s['asst'] for s in sessions)))), "Average output tokens per assistant turn, reasoning included."), ("logged cost", f"${tot_cost:,.2f}", "What the provider billed. Free-tier models log $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, including the system prompt and the taste file, on every turn."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input tokens served from the provider's prompt cache, so re-sending the taste file is mostly cheap."), ("output tokens", fmt(tot_out), "Tokens the model generated, including its reasoning.")]))
+    H.append("<div class=card>Every assistant message carries its own model and usage record, so cost, tokens, thinking and taste activations here are attributed per message, not per session. Cost is what the provider logged; free-tier models show $0 while still consuming tokens.</div>")
+    H.append("<p class=charttip>Output tok/s = output tokens ÷ the wall-clock wait for that reply (from your prompt or the tool result until the reply was stored), median per turn. Tokens per turn are averages. Thinking chars per turn = visible reasoning produced; more reasoning leaves more room to consult taste.</p>")
+    H.append(table(["Model", "#Turns", "#Input tokens", "#Cache hit %", "#Output tokens", "#Cost $", "#Input tok/turn", "#Output tok/turn", "#Output tok/s", "#Thinking chars/turn", "#Activations /100 turns", "#Steering share %"], [(m, pm[m]["asst"], fmt(pm[m]["inp"]), round(100 * pm[m]["cr"] / max(1, pm[m]["inp"])), fmt(pm[m]["out"]), round(pm[m]["cost"], 2), fmt(round(pm[m]["inp"] / max(1, pm[m]["asst"]))), fmt(round(pm[m]["out"] / max(1, pm[m]["asst"]))), round(tps_med[m], 1), round(pm[m]["think"] / max(1, pm[m]["asst"])), round(100 * ma[m] / max(1, pm[m]["asst"]), 1), round(100 * ms[m] / max(1, ma[m]))) for m in ml]))
+    H.append(two(hbars("Output speed by model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Wall-clock speed you experienced, median turn", ylabel="Model", lw=230, w=620),
+                 hbars("Output tokens per turn by model", [(m, round(pm[m]["out"] / max(1, pm[m]["asst"])), "") for m in ml], "Output tokens per assistant turn", "Reasoning plus visible text", ylabel="Model", lw=230, w=620)))
+    OV["speed"] = hbars("Output speed by model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Wall-clock speed you experienced, median turn", ylabel="Model", lw=230, w=620)
+    OV["cost"] = hbars("Cost by model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)
+    OV["model"] = hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620)
+    H.append(two(hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620),
+                 hbars("Thinking volume per turn, by model", [(m, round(pm[m]["think"] / max(1, pm[m]["asst"])), "") for m in ml], "Thinking characters per assistant turn", "Models that think more have more room to consult taste", ylabel="Model", lw=230, w=620)))
+    weeks = collections.OrderedDict()
+    for s in sessions:
+        wk = (datetime.date.fromisoformat(s["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(s["date"]).weekday())).isoformat()
+        weeks.setdefault(wk, collections.Counter()).update(s["models"])
+    H.append(two(flex(stacked_v("Assistant turns per week by model", [(wk[5:], dict(c)) for wk, c in weeks.items()], ml, mcols, "Week starting", "Assistant turns", w=620, h=380), legend(mcols, "Model")),
+                 hbars("Cost by model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Logged by the provider; free tiers show 0", ylabel="Model", lw=230, w=620)))
+
+    # ================= USAGE =================
+    tab("Usage")
+    allp = [t for s in sessions for _, t in s["prompts"] if t.strip()]
+    lens = sorted(len(t) for t in allp) or [0]
+    H.append(kpi([("sessions", len(sessions), ""), ("user prompts", len(allp), "Messages you typed, excluding tool results."), ("assistant turns", fmt(sum(s['asst'] for s in sessions)), "Model responses, including tool-calling steps. Many turns per prompt means long autonomous runs."), ("minutes", fmt(sum(s['minutes'] for s in sessions)), "Wall-clock time from first to last message per session."), ("cost per prompt", f"${tot_cost/max(1,len(allp)):.2f}", ""), ("median prompt chars", lens[len(lens)//2], "")]))
+    # session timeline: x = date, y = assistant turns, bubble = minutes, color = model
+    sd0 = datetime.date.fromisoformat(sessions[0]["date"]); sd1 = datetime.date.fromisoformat(sessions[-1]["date"]); sspan = max(1, (sd1 - sd0).days)
+    TW, TH, TL, TB, TR = 1240, 380, 70, 60, 30; mxt = max(s["asst"] for s in sessions) or 1
+    tx = lambda d: TL + 20 + (datetime.date.fromisoformat(d) - sd0).days / sspan * (TW - TL - TR - 40); ty = lambda v: TH - TB - v / mxt * (TH - TB - 60)
+    out = [svg_open(TW, TH), title_block(TW, "Session timeline", "Each bubble is a session. Height = assistant turns, size = minutes, color = model. Hover for details.")]
+    for v in range(0, mxt + 1, max(1, math.ceil(mxt / 5))): out.append(L(TL, ty(v), TW - TR, ty(v), "var(--grid)", 1)); out.append(T(TL - 8, ty(v) + 4, fmt(v), anchor="end"))
+    d = sd0 - datetime.timedelta(days=sd0.weekday())
+    while d <= sd1 + datetime.timedelta(days=7):
+        px = tx(d.isoformat())
+        if TL <= px <= TW - TR: out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, d.strftime("%b %d"), anchor="middle"))
+        d += datetime.timedelta(days=7)
+    out.append(L(TL, 50, TL, TH - TB)); out.append(L(TL, TH - TB, TW - TR, TH - TB))
+    out.append(T((TL + TW - TR) / 2, TH - 12, "Date", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
+    for s in sorted(sessions, key=lambda s: -s["minutes"]):
+        r = 4 + math.sqrt(max(1, s["minutes"])) * 0.55
+        out.append(f"<circle cx='{tx(s['date']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {s['cites']} taste activations</title></circle>")
+    OV["timeline"] = flex("".join(out) + "</svg>", legend(mcols, "Model"))
+    H.append(OV["timeline"])
+    weeks_u = collections.OrderedDict()
+    for s in sessions:
+        wk = (datetime.date.fromisoformat(s["date"]) - datetime.timedelta(days=datetime.date.fromisoformat(s["date"]).weekday())).isoformat()
+        W_ = weeks_u.setdefault(wk, collections.Counter()); W_["prompts"] += s["user"]; W_["sessions"] += 1
+    H.append("<details><summary>Sessions table</summary>" + table(["Date", "Session", "Model", "#Prompts", "#Turns", "#Turns/prompt", "#Minutes", "#Tool calls", "#Cost $", "#Activations", "#Pushbacks"], [(s["date"], f"{s['sid']} {s['title']}", s["model"][:26], s["user"], s["asst"], round(s["asst"] / max(1, s["user"]), 1), s["minutes"], sum(s["tools"].values()), round(s["cost"], 2), s["cites"], s["push"]) for s in sessions]) + "</details>")
+    tools = collections.Counter()
+    for s in sessions: tools.update(s["tools"])
+    ed = tools.get("edit_file", 0) + tools.get("write_file", 0); rd = tools.get("read_file", 0) + tools.get("grep", 0) + tools.get("glob", 0) + tools.get("read_multiple_files", 0)
+    tools_chart = hbars("Tool calls", [(t, k, "") for t, k in tools.most_common(15)], "Calls", f"Edits per read {ed/max(1,rd):.2f} · shell calls per edit {tools.get('shell_command',0)/max(1,ed):.1f} · subagents {tools.get('agent',0)}", ylabel="Tool", w=620, lw=170)
+    hours = collections.Counter(); wdays = collections.Counter()
+    for s in sessions:
+        for ts, _ in s["prompts"]:
+            try: dt = datetime.datetime.fromisoformat(ts.rstrip("Z")); hours[dt.hour] += 1; wdays[dt.strftime("%a")] += 1
+            except Exception: pass
+    hour_chart = hbars("Prompts by hour (UTC)", [(f"{h:02d}:00", hours.get(h, 0), "") for h in range(24) if hours.get(h, 0)], "Prompts", ylabel="Hour", w=620, lw=120, sort=False)
+    wday_chart = hbars("Prompts by weekday", [(w, wdays.get(w, 0), "") for w in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] if wdays.get(w)], "Prompts", ylabel="Day", w=620, lw=120, sort=False)
+    slash = sum(1 for t in allp if t.lstrip().startswith("/"))
+    opens = collections.Counter(" ".join(re.findall(r"[a-z']+", t.lower())[:2]) for t in allp if not t.lstrip().startswith("/"))
+    open_chart = hbars("How prompts open (first two words)", [(o, k, "") for o, k in opens.most_common(12)], "Prompts", f"{slash} prompts were slash commands", ylabel="Opening", w=620, lw=150)
+    len_chart = hbars("Prompt length", [(f"{lo}–{lo+99}", sum(1 for l in lens if lo <= l < lo + 100), "") for lo in range(0, min(1000, lens[-1] + 1), 100)] + [("1000+", sum(1 for l in lens if l >= 1000), "")], "Prompts", ylabel="Characters", w=620, lw=120, sort=False)
+    H.append(two(stacked_v("Prompts per week", [(wk[5:], {"prompts": c["prompts"]}) for wk, c in weeks_u.items()], ["prompts"], {"prompts": "var(--bar)"}, "Week starting", "Prompts", w=620, h=300), tools_chart)); H.append(two(open_chart, len_chart)); H.append(two(hour_chart, wday_chart))
+
+    # ================= HEALTH =================
+    tab("Health")
+    long_b = [r for r in rows if r["n"] > 300]
+    def jac(a, b): return len(a & b) / max(1, len(a | b))
+    dups = [(i, j) for i in range(len(rows)) for j in range(i + 1, len(rows)) if jac(btoks[rows[i]["i"]-1], btoks[rows[j]["i"]-1]) >= 0.6]
+    cc_hist = collections.Counter(round(r["conf"], 2) for r in rows)
+    H.append(kpi([("bytes", fmt(len(raw)), ""), ("est. tokens", fmt(est_tokens), "Bytes ÷ 4, about ±20%."), ("share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request's prompt the taste file occupies."), ("over 300 chars", len(long_b), "Long bullets read like incident reports rather than preferences and cost tokens every turn."), ("near-duplicates", len(dups), "Pairs of bullets sharing most of their words."), ("never activated", len(never), "Bullets never referenced in any recorded reasoning."), ("learn events in cmd", len(learn_events), "Times the agent called the taste tool inside a cmd session. Most bullets came from mining other agents' sessions instead.")]))
+    size_chart = hbars("Base prompt size per session", [(f"{s['date']} {s['title'] or s['sid']}", s["first_in"] or 0, "") for s in sessions], "First-turn input tokens", "Growth over time is mostly the taste file", ylabel="Session", lw=330, w=1240, sort=False)
+    len_bins = [(f"{lo}–{lo+99}", sum(1 for r in rows if lo <= r["n"] < lo + 100), "") for lo in range(0, 700, 100)] + [("700+", sum(1 for r in rows if r["n"] >= 700), "")]
+    blen_chart = hbars("Bullet length", len_bins, "Number of bullets", "Characters per bullet. Long bullets read like incident reports and cost tokens every turn.", ylabel="Characters", w=620, lw=110, sort=False)
+    byday = collections.Counter(r["date"] for r in rows); W2, H2 = 1240, 190; GX0, GX1 = 70, W2 - 30
+    out = [svg_open(W2, H2), title_block(W2, "Bullets added over time")]
+    acc = 0; pts = []
+    for dd in sorted(byday):
+        acc += byday[dd]; px = GX0 + (datetime.date.fromisoformat(dd) - d0).days / span * (GX1 - GX0); py = H2 - 30 - acc / len(rows) * (H2 - 70); pts.append(f"{px:.0f},{py:.0f}")
+        out.append(R(px - 2, H2 - 30 - byday[dd] * 4, 4, byday[dd] * 4, "var(--muted)", f"{dd}: {byday[dd]} bullets"))
+    out.append(f"<polyline points='{GX0},{H2-30} {' '.join(pts)}' fill='none' stroke='var(--fg)' stroke-width='2'/>")
+    out.append(T(GX0, H2 - 8, d0)); out.append(T(GX1, H2 - 8, d1, anchor="end")); out.append(T(GX0 - 8, 44, len(rows), anchor="end")); out.append(T(GX0 - 8, H2 - 30, 0, anchor="end"))
+    growth_chart = "".join(out) + "</svg>"
+    conf_chart = hbars("Confidence distribution", [(f"{c:.2f}", k, "") for c, k in sorted(cc_hist.items(), reverse=True)], "Number of bullets", ylabel="Confidence", w=620, lw=90, sort=False)
+    H.append(two(conf_chart, blen_chart)); H.append(size_chart); H.append(growth_chart); OV["size"] = size_chart
+    h3("Never-activated bullets"); H.append("<p class=muted>Present in every prompt, never referenced in any recorded thinking. Candidates to trim.</p><details><summary>Show " + str(len(never)) + "</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['conf']:.2f}</span> {esc(r['text'][:200])}</li>" for r in never) + "</ul></details>")
+    h3("Longest bullets"); H.append("<details><summary>Show " + str(len(long_b)) + " over 300 chars</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['n']} chars</span> {esc(r['text'][:160])}…</li>" for r in sorted(long_b, key=lambda r: -r["n"])) + "</ul></details>")
+    if dups: h3("Near-duplicates"); H.append("<ul>" + "".join(f"<li>#{rows[i]['i']} ≈ #{rows[j]['i']}: {esc(rows[i]['text'][:100])}…</li>" for i, j in dups) + "</ul>")
+    H.append("</div>")
+    ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>The key picture across every tab.</p>"]
+    ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "Provider-billed; free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model on every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache."), ("output tok/s (median)", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste bullets", len(rows), "Learned preferences in taste.md."), ("activations", len(acts), "Times the model's reasoning consulted a specific bullet."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those, how often it changed the plan."), ("never activated", len(never), "Bullets in every prompt that were never used.")]))
+    ov.append("<div class=card><b>Reading this dashboard.</b> <b>Taste</b> is the file of learned preferences cmd injects into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. A <b>habit</b> is a recurring way you want things done; a <b>work area</b> is what a bullet is about. Hover any <span class=tip>?</span> for definitions.</div>")
+    ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
+    ov.append(two(OV.get("model", ""), OV.get("work", "")))
+    ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
+    ov.append(OV.get("timeline", ""))
+    ov.append("</div>")
+    H[0:0] = ov
+    H.insert(0, "<div class=tabs>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>")
+
+    return H
+
+CUT = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+views = [("all", "All time", rows, sessions, acts), ("30d", "Last 30 days", [r for r in rows if r["date"] >= CUT], [s for s in sessions if s["date"] >= CUT], [a for a in acts if a["date"] >= CUT])]
+H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names and paths redacted. " if PUBLIC else "") + f"Rendered {datetime.date.today()} · <code>{esc(redact(TASTE))}</code> · every classification is keyword-based, treat it as a lens.</p></div>")
+H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")
+for k, lab, rv, sv, av in views:
+    H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != "all" else "") + ">")
+    if rv and sv: H += build("-" + k, rv, sv, av)
+    else: H.append("<p class=muted>No data in this range.</p>")
+    H.append("</div>")
+H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');localStorage.setItem('cmdtab',i);};});const i=+(localStorage.getItem('cmdtab')||0);bs[i].click();});</script>")
+H.append("<script>document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+b.dataset.v);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));const i=+(localStorage.getItem('cmdtab')||0);const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();});"
+         "document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),asc=th.classList.contains('desc');tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));th.classList.add(asc?'asc':'desc');const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};const tb=rows[0].parentNode;rows.sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));});document.querySelector('.toggle button').classList.add('on');"
+         "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
+open(OUT, "w").write("\n".join(H))
+print("wrote", OUT, "| bullets", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))
+if not A.no_open:
+    try: subprocess.Popen(["xdg-open", f"file://{OUT}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception: pass
