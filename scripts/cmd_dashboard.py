@@ -625,8 +625,8 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
     # sankey: where taste comes from and who uses it
     src_in = collections.Counter(r["src"] for r in ROWS_ALL); cons = collections.Counter(a["model"] for a in acts)
-    def sankey(src_in, cons, w=1240, h=460):
-        Lx, Rx, Mx, nw, gap, top, bot = 20, w - 20, w / 2, 14, 10, 60, 30
+    def sankey(src_in, cons, w=1240, h=500):
+        Lx, Rx, Mx, nw, gap, top, bot = 60, w - 60, w / 2, 14, 10, 96, 30
         H_ = h - top - bot
         def layout(counter, x):
             tot = sum(counter.values()) or 1; y = top; nodes = {}
@@ -636,7 +636,11 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
             return nodes
         Ln = layout(src_in, Lx); Rn = layout(cons, Rx - nw)
         mid_h = H_ * 0.9; mid_y = top + (H_ - mid_h) / 2
-        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Left: sessions mined to write bullets (whole file). Right: models whose reasoning consulted bullets in this range. Same model = same color on both sides; same provider = same hue.")]
+        out = [svg_open(w, h), title_block(w, "Taste flow: where bullets come from, and which models use them", "Each side is scaled to its own total, so widths are shares within a side, not per-turn rates. For rates per 100 turns see the chart below.")]
+        tot_in, tot_out = sum(src_in.values()), sum(cons.values())
+        out.append(T(Lx, top - 30, "IN · bullets created", 13, "bold")); out.append(T(Lx, top - 14, f"{tot_in} bullets in the whole file, by the session that taught them", 11, fill="var(--muted)"))
+        out.append(T(Rx, top - 30, "OUT · bullets consulted", 13, "bold", "end")); out.append(T(Rx, top - 14, f"{tot_out} consultations in this range, by the model that used them", 11, fill="var(--muted)", anchor="end"))
+        out.append(T(18, top + H_ / 2, "Source of bullets", 12, "bold", "middle", rot=True)); out.append(T(w - 14, top + H_ / 2, "Model using bullets", 12, "bold", "middle", rot=True))
         neutral = {"Claude Code": "hsl(210 10% 62%)", "unmatched (Cursor or unreadable)": "hsl(210 8% 40%)"}
         scol = {k: (ALL_MCOLS.get(k[6:], model_color(k[6:])) if k.startswith("cmd · ") else neutral.get(k, "var(--muted)")) for k in src_in}
         out.append(R(Mx - nw / 2, mid_y, nw, mid_h, "var(--fg)", f"taste.md · {sum(src_in.values())} bullets in, {sum(cons.values())} consultations out", 0.9))
@@ -644,16 +648,16 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         yl = mid_y
         for k, (x, y, hh, v) in Ln.items():
             hh2 = mid_h * v / max(1, sum(src_in.values()))
-            out.append(R(x, y, nw, hh, scol[k], f"{k}: {v} bullets", 0.95))
+            out.append(R(x, y, nw, hh, scol[k], f"{k}: {100*v/max(1,tot_in):.0f}% of bullets ({v})", 0.95))
             out.append(f"<path d='M{x+nw:.0f},{y:.0f} C{(x+nw+Mx)/2:.0f},{y:.0f} {(x+nw+Mx)/2:.0f},{yl:.0f} {Mx-nw/2:.0f},{yl:.0f} L{Mx-nw/2:.0f},{yl+hh2:.0f} C{(x+nw+Mx)/2:.0f},{yl+hh2:.0f} {(x+nw+Mx)/2:.0f},{y+hh:.0f} {x+nw:.0f},{y+hh:.0f} Z' fill='{scol[k]}' opacity='0.35'><title>{esc(k)} → taste.md: {v} bullets</title></path>")
-            out.append(T(x + nw + 8, y + hh / 2 + 4, f"{k} ({v})", 12, "600"))
+            out.append(T(x + nw + 8, y + hh / 2 + 4, f"{k} · {100*v/max(1,tot_in):.0f}% ({v})", 12, "600"))
             yl += hh2
         yr = mid_y
         for k, (x, y, hh, v) in Rn.items():
             hh2 = mid_h * v / max(1, sum(cons.values()))
-            out.append(R(x, y, nw, hh, mcols.get(k, "var(--muted)"), f"{k}: {v} consultations", 0.95))
+            out.append(R(x, y, nw, hh, mcols.get(k, "var(--muted)"), f"{k}: {100*v/max(1,tot_out):.0f}% of consultations ({v})", 0.95))
             out.append(f"<path d='M{Mx+nw/2:.0f},{yr:.0f} C{(Mx+x)/2:.0f},{yr:.0f} {(Mx+x)/2:.0f},{y:.0f} {x:.0f},{y:.0f} L{x:.0f},{y+hh:.0f} C{(Mx+x)/2:.0f},{y+hh:.0f} {(Mx+x)/2:.0f},{yr+hh2:.0f} {Mx+nw/2:.0f},{yr+hh2:.0f} Z' fill='{mcols.get(k, "var(--muted)")}' opacity='0.35'><title>taste.md → {esc(k)}: {v} consultations</title></path>")
-            out.append(T(x - 8, y + hh / 2 + 4, f"{k} ({v})", 12, "600", "end"))
+            out.append(T(x - 8, y + hh / 2 + 4, f"{k} · {100*v/max(1,tot_out):.0f}% ({v})", 12, "600", "end"))
             yr += hh2
         return "".join(out) + "</svg>"
     if src_in and cons: OV["sankey"] = sankey(src_in, cons); H.append(OV["sankey"])
