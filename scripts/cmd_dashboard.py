@@ -602,18 +602,23 @@ def build(SUF, rows, sessions, acts):
 
     return H
 
-CUT = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
-views = [("all", "All time", rows, sessions, acts), ("30d", "Last 30 days", [r for r in rows if r["date"] >= CUT], [s for s in sessions if s["date"] >= CUT], [a for a in acts if a["date"] >= CUT])]
+def _cut(days): return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+RANGES = [("1d", "Today", 1), ("7d", "7 days", 7), ("30d", "30 days", 30), ("all", "All time", None)]
+views = []
+for k, lab, days in RANGES:
+    c = _cut(days - 1) if days else "0000"
+    views.append((k, lab, rows, [s for s in sessions if s["date"] >= c], [a for a in acts if a["date"] >= c]))
+# default: the shortest range that has any sessions; the taste file itself is always shown in full
+DEFAULT_VIEW = next((k for k, _, _, sv, _ in views if sv), "all")
 H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names and paths redacted. " if PUBLIC else "") + f"Rendered {datetime.date.today()} · <code>{esc(redact(TASTE))}</code> · every classification is keyword-based, treat it as a lens.</p></div>")
 H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")
 for k, lab, rv, sv, av in views:
-    H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != "all" else "") + ">")
+    H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != DEFAULT_VIEW else "") + ">")
     if rv and sv: H += build("-" + k, rv, sv, av)
-    else: H.append("<p class=muted>No data in this range.</p>")
+    else: H.append(f"<p class=muted style='padding:24px 0'>No cmd sessions in this range. Pick a wider range above.</p>")
     H.append("</div>")
 H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');localStorage.setItem('cmdtab',i);};});const i=+(localStorage.getItem('cmdtab')||0);bs[i].click();});</script>")
-H.append("<script>document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+b.dataset.v);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));const i=+(localStorage.getItem('cmdtab')||0);const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();});"
-         "document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),asc=th.classList.contains('desc');tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));th.classList.add(asc?'asc':'desc');const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};const tb=rows[0].parentNode;rows.sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));});document.querySelector('.toggle button').classList.add('on');"
+H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));localStorage.setItem('cmdrange',k);const i=+(localStorage.getItem('cmdtab')||0);const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));showRange('" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
 open(OUT, "w").write("\n".join(H))
 print("wrote", OUT, "| bullets", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))

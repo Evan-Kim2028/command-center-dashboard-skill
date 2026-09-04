@@ -45,7 +45,7 @@ Six tabs. Each answers one question; charts are not repeated across tabs.
 5. **Usage**: session timeline bubble chart, prompts per week, tool calls, prompt openings, prompt length, prompts by hour and weekday, sessions table (collapsed, sortable).
 6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, bullet length, base prompt size per session, bullets added over time, never-activated bullets, longest bullets, duplicates.
 
-Global controls: All time / Last 30 days (keeps the current tab), Dark / Light (persisted), tooltips on every KPI.
+Global controls: Today / 7 days / 30 days / All time (defaults to the shortest range with sessions, keeps the current tab, remembers your choice), Dark / Light (persisted), tooltips on every KPI.
 
 ## Definitions the script uses (keep these consistent if you change anything)
 
