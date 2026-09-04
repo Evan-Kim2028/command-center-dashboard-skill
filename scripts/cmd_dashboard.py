@@ -345,9 +345,18 @@ def T(x, y, s, size=11, weight="normal", anchor="start", fill="var(--fg)", rot=N
     return f"<text x='{x:.0f}' y='{y:.0f}' text-anchor='{anchor}' fill='{fill}' style='font-size:{size}px;font-weight:{weight}'{tr}>{esc(s)}</text>"
 def L(x1, y1, x2, y2, c="var(--axis)", w=1.5): return f"<line x1='{x1:.0f}' y1='{y1:.0f}' x2='{x2:.0f}' y2='{y2:.0f}' stroke='{c}' stroke-width='{w}'/>"
 def R(x, y, w, h, c, title="", op=.9, cls=""): return f"<rect class='{cls}' x='{x:.0f}' y='{y:.0f}' width='{max(0,w):.0f}' height='{h:.0f}' fill='{c}' opacity='{op}' rx='2'><title>{esc(title)}</title></rect>"
-def title_block(w, t, sub=None):
-    s = T(22, 26, t, 16 if len(t) * 9 < w - 260 else 13, "bold")
-    if sub: s += T(22, 46, sub, 12, fill="var(--muted)")
+def title_block(w, t, sub=None, reserve=0):
+    """reserve = px kept free at the right for toggle controls; long text is clipped with the full text on hover"""
+    avail = w - 22 - reserve - 12
+    if len(t) * 9 > avail: t_ = t[: max(8, int(avail / 9) - 1)] + "…"
+    else: t_ = t
+    s = T(22, 26, t_, 16, "bold")
+    if t_ != t: s = s.replace(">" + esc(t_) + "</text>", f"><title>{esc(t)}</title>{esc(t_)}</text>")
+    if sub:
+        sub_ = sub if len(sub) * 6.4 <= avail else sub[: max(8, int(avail / 6.4) - 1)] + "…"
+        st = T(22, 46, sub_, 12, fill="var(--muted)")
+        if sub_ != sub: st = st.replace(">" + esc(sub_) + "</text>", f"><title>{esc(sub)}</title>{esc(sub_)}</text>")
+        s += st
     return s
 
 def hbars(title, items, xlabel, sub=None, w=900, color="var(--bar)", ylabel=None, lw=250, sort=True):
@@ -405,11 +414,11 @@ def _tipdata(lab, d, series, colmap):
     rows_ = "".join(f"<div><span class=dot style='background:{colmap[k]}'></span>{esc(k)}<b>{(fmt(d[k]) if isinstance(d[k], int) or float(d[k]).is_integer() else f'{d[k]:.2f}'.rstrip('0').rstrip('.'))}</b></div>" for k in series if d.get(k))
     tt = (fmt(tot) if isinstance(tot, int) or float(tot).is_integer() else f"{tot:.2f}".rstrip("0").rstrip("."))
     return html.escape(f"<div class=tt-h>{esc(lab)}</div>{rows_}<div class=tt-t>total<b>{tt}</b></div>", quote=True)
-def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=360):
+def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=360, reserve=0):
     """cats: [(label, {series: value})] vertical stacked columns"""
     L0, top, B = 70, 70, 70; mx = max([sum(d.values()) for _, d in cats] + [0]) or 1
     cw = (w - L0 - 30) / max(1, len(cats)); ys = lambda v: top + (1 - v / mx) * (h - top - B)
-    out = [svg_open(w, h), title_block(w, title, sub)]
+    out = [svg_open(w, h), title_block(w, title, sub, reserve)]
     ticks = [mx * i / 5 for i in range(6)] if mx < 6 else list(range(0, int(mx) + 1, max(1, math.ceil(mx / 6))))
     for v in ticks:
         out.append(L(L0, ys(v), w - 30, ys(v), "var(--grid)", 1)); out.append(T(L0 - 8, ys(v) + 4, (f"{v:.2f}".rstrip("0").rstrip(".") if mx < 6 else fmt(v)), 12, anchor="end"))
@@ -445,9 +454,10 @@ def cumul(cats):
     for lab, d in cats:
         acc.update(d); out.append((lab, dict(acc)))
     return out
-def tseries(title, cats, series, colmap, xlabel, ylabel, sub=None, w=620, h=320, leg=None):
+def tseries(title, cats, series, colmap, xlabel, ylabel, sub=None, w=620, h=320, leg=None, nested=False):
     """time series with a Per period / Cumulative switch"""
-    a = stacked_v(title, cats, series, colmap, xlabel, ylabel, sub, w=w, h=h); b = stacked_v(title, cumul(cats), series, colmap, xlabel, ylabel, "Cumulative · running total across the range", w=w, h=h)
+    rv = 310 if nested else 180
+    a = stacked_v(title, cats, series, colmap, xlabel, ylabel, sub, w=w, h=h, reserve=rv); b = stacked_v(title, cumul(cats), series, colmap, xlabel, ylabel, "Cumulative · running total", w=w, h=h, reserve=rv)
     if leg: a, b = flex(a, leg), flex(b, leg)
     return toggle([("Per period", a), ("Cumulative", b)])
 def two(*items): return "<div class=two>" + "".join(f"<div class=cell>{it}</div>" for it in items) + "</div>"
@@ -456,8 +466,10 @@ def table(headers, body_rows, cls="sortable"):
 def fmt(n):
     if not isinstance(n, (int, float)): return str(n)
     a = abs(n)
-    if a >= 1e6: return f"{n/1e6:.1f}M"
-    if a >= 1e3: return f"{n/1e3:.1f}k"
+    for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if a >= div:
+            v = n / div
+            return f"{v:.0f}{suf}" if abs(v) >= 100 else f"{v:.1f}{suf}".replace(".0" + suf, suf)
     return f"{n:.0f}" if float(n).is_integer() else f"{n:.2f}"
 
 # ---------------- page ----------------
@@ -941,8 +953,8 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         return [dict(_s=t["model"], _v=t["inp"] + t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
     cache_share = 100 * tot_cr / max(1, tot_in)
     tk_ = by_hour(tok_items(sessions), lambda a: a["ts"][:19])
-    cost_pane = tseries(f"Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · catalog prices · free tiers $0", w=620, h=320, leg=legend(mcols, "Model"))
-    tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Tokens", f"Input + output by model · {cache_share:.0f}% of input served from cache", w=620, h=320, leg=legend(mcols, "Model"))
+    cost_pane = tseries(f"Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · catalog prices · free tiers $0", w=620, h=320, leg=legend(mcols, "Model"), nested=True)
+    tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Tokens", f"By model · {cache_share:.0f}% of input from cache", w=620, h=320, leg=legend(mcols, "Model"), nested=True)
     ov.append(two(tseries(f"Assistant Turns {PER.title()}", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
                   toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
     if gran != "hour":
@@ -952,8 +964,8 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         if any(sum(c.values()) for c in th24.values()):
             tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
             ov.append(two(tseries("Assistant Turns per Hour, Last 24 Hours", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300, leg=legend(ALL_MCOLS, "Model")),
-                          toggle([("Cost", tseries("Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"))),
-                                  ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Tokens", "Input + output by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model")))])))
+                          toggle([("Cost", tseries("Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"), nested=True)),
+                                  ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Tokens", "Input + output by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"), nested=True))])))
     h3("Cost and speed", ov)
     ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
