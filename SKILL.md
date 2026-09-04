@@ -38,7 +38,7 @@ If the current directory has no cmd sessions the script falls back to the projec
 
 Six tabs. Each answers one question; charts are not repeated across tabs.
 
-1. **Overview** (default): cost, input tokens, cache hit, output tok/s, taste share of prompt, activations, steering share, never-activated. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
+1. **Overview** (default): logged cost, input tokens, cache hit, output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused bullets. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per bullet by habit, activations by habit, habits by work area, session timeline.
 2. **Taste**: what the file says. Bullets learned in the selected range: habits by work area, where bullets came from (Claude Code / cmd + model / unmatched), bullets learned per week by source, and a paginated bullet table with area, habit, date and text filters, sorted by date descending.
 3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per bullet, most-activated bullets, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
 4. **Models**: per-message attribution. Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
@@ -67,7 +67,8 @@ Global controls: Today / 7 days / 30 days / All time (defaults to the shortest r
 - Horizontal bars sort by value descending unless the axis has a natural order (hour, weekday, confidence, length, chronology).
 - Pair charts in `two(...)` by similar row count; cells stretch to equal height with the SVG anchored top-left.
 - Labels truncate to the label column with the full text in a hover `<title>`.
-- Every KPI gets a plain-English tooltip; no unexplained jargon on the page.
+- Every KPI gets a plain-English tooltip; no unexplained jargon on the page. KPIs are not repeated across tabs.
+- Sorting a table column highlights that column with a value gradient and dims the rest; the third click restores the original order and clears the highlight.
 - `--public` must pass a leak check: grep the output for hostnames, repo names, usernames and `/home/` before sharing.
 
 ## Adapting to another setup
