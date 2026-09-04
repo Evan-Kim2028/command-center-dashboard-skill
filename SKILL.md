@@ -83,7 +83,7 @@ After building, confirm:
 
 ```bash
 grep -c "id='tab-Overview" <out.html>      # ≥ 1 per range view
-grep -c "<circle class='b'" <out.html>     # bullet dots present if any charted
+grep -c "Session timeline" <out.html>       # timeline bubble chart present (≥ 2, one per range view)
 python3 -c "import json,re;h=open('<out.html>').read();print(len(h)//1024,'KB')"
 ```
 
