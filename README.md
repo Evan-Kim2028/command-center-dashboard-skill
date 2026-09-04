@@ -4,6 +4,16 @@ A single-file HTML dashboard of everything [Command Code](https://commandcode.ai
 
 Python 3.10+, no packages. One optional read-only call to api.commandcode.ai for your billed total (`--offline` to skip).
 
+![Overview tab](docs/overview.png)
+
+**Taste flow.** Where learnings come from and which models consult them.
+
+![Taste flow sankey](docs/taste-flow.png)
+
+**What taste knows about you** and **how much each model uses it**.
+
+<p><img src="docs/my-taste.png" width="49%"> <img src="docs/taste-usage.png" width="49%"></p>
+
 ## Install
 
 As a skill (Claude Code or Command Code):
