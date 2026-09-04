@@ -349,11 +349,12 @@ def stacked_h(title, rowsx, series, colmap, xlabel, ylabel, sub=None, w=900):
 
 def stacked_v(title, cats, series, colmap, xlabel, ylabel, sub=None, w=900, h=360):
     """cats: [(label, {series: value})] vertical stacked columns"""
-    L0, top, B = 70, 70, 70; mx = max([sum(d.values()) for _, d in cats] + [1])
+    L0, top, B = 70, 70, 70; mx = max([sum(d.values()) for _, d in cats] + [0]) or 1
     cw = (w - L0 - 30) / max(1, len(cats)); ys = lambda v: top + (1 - v / mx) * (h - top - B)
     out = [svg_open(w, h), title_block(w, title, sub)]
-    for v in range(0, int(mx) + 1, max(1, math.ceil(mx / 6))):
-        out.append(L(L0, ys(v), w - 30, ys(v), "var(--grid)", 1)); out.append(T(L0 - 8, ys(v) + 4, v, 12, anchor="end"))
+    ticks = [mx * i / 5 for i in range(6)] if mx < 6 else list(range(0, int(mx) + 1, max(1, math.ceil(mx / 6))))
+    for v in ticks:
+        out.append(L(L0, ys(v), w - 30, ys(v), "var(--grid)", 1)); out.append(T(L0 - 8, ys(v) + 4, (f"{v:.2f}".rstrip("0").rstrip(".") if mx < 6 else fmt(v)), 12, anchor="end"))
     for k, (lab, d) in enumerate(cats):
         x = L0 + k * cw + cw * 0.15; acc = 0
         for sname in series:
@@ -372,6 +373,13 @@ def tip(t): return f"<span class=tip tabindex=0 data-tip='{esc(t)}'>?</span>"
 def kpi(items):
     return "<div class=kpi>" + "".join(f"<div><b>{v}</b>{esc(k)}{tip(tp) if tp else ''}</div>" for k, v, tp in items) + "</div>"
 def flex(chart, leg): return f"<div class=flex>{chart}{leg}</div>"
+_tg = [0]
+def toggle(options):
+    """options: [(label, html)] -> segmented control that shows one at a time"""
+    _tg[0] += 1; tid = f"tg{_tg[0]}"
+    ctl = f"<div class='seg mini' data-tg='{tid}'>" + "".join(f"<button data-i='{i}' class='{'on' if i == 0 else ''}'>{esc(l)}</button>" for i, (l, _) in enumerate(options)) + "</div>"
+    body = "".join(f"<div class='tgpane' data-tg='{tid}' data-i='{i}'{'' if i == 0 else ' style=\"display:none\"'}>{h}</div>" for i, (_, h) in enumerate(options))
+    return f"<div class=tgwrap>{ctl}{body}</div>"
 def two(*items): return "<div class=two>" + "".join(f"<div class=cell>{it}</div>" for it in items) + "</div>"
 def table(headers, body_rows, cls="sortable"):
     return f"<table class='{cls}'><tr>" + "".join(f"<th{' class=num' if h.startswith('#') else ''}>{esc(h.lstrip('#'))}</th>" for h in headers) + "</tr>" + "".join("<tr>" + "".join(f"<td{' class=num' if isinstance(v,(int,float)) else ''}>{v if isinstance(v,str) and v.startswith('<') else (fmt(v) if isinstance(v,int) and abs(v) >= 1000 else esc(v))}</td>" for v in r) + "</tr>" for r in body_rows) + "</table>"
@@ -392,6 +400,7 @@ a{color:var(--accent)}code{font-family:var(--mono);font-size:12px;background:var
 h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 4px}h2{font-size:16px;margin:32px 0 10px}h3{font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:28px 0 10px}
 .sub{color:var(--muted);font-size:13px;margin:0 0 16px}.muted{color:var(--muted)}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:8px 0 4px}
+.tgwrap{position:relative}.seg.mini{position:absolute;right:12px;top:22px;z-index:3;padding:1px}.seg.mini button{padding:3px 9px;font-size:12px}
 .seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:2px}.seg button{border:0;background:transparent;color:var(--muted);padding:6px 12px;border-radius:6px;font:inherit;font-size:13px;cursor:pointer}.seg button.on{background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
 .tabs{display:flex;gap:2px;position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 0;margin:8px 0 0;border-bottom:1px solid var(--border)}.tabs button{border:0;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.tabs button:hover{color:var(--fg)}.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
 .tab{display:none}.tab.on{display:block}.tabdesc{color:var(--muted);margin:14px 0 18px;font-size:14px}
@@ -775,16 +784,24 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     if ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
     th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
-    ch_ = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+    ch_ = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+    TOKC = {"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}; TOKS = list(TOKC)
+    def tok_items(src):
+        return [dict(_s="cached input", _v=t["cr"], ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="uncached input", _v=max(0, t["inp"] - t["cr"]), ts=t["ts"]) for s_ in src for t in s_["turns"]] + [dict(_s="output", _v=t["out"], ts=t["ts"]) for s_ in src for t in s_["turns"]]
+    tk_ = by_hour(tok_items(sessions), lambda a: a["ts"][:19])
+    cost_pane = flex(stacked_v(f"Cost {PER} (local time)", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "Stacked by model; free tiers add nothing", w=620, h=320), legend(mcols, "Model"))
+    tok_pane = flex(stacked_v(f"Tokens {PER} (local time)", [(l, dict(c)) for l, c in tk_.items()], TOKS, TOKC, BUCKET_WORD.capitalize(), "Tokens", "Cached input is re-read from the prompt cache and billed at a fraction of uncached", w=620, h=320), legend(TOKC, "Token kind"))
     ov.append(two(flex(stacked_v(f"Assistant turns {PER} (local time)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320), legend(mcols, "Model")),
-                  stacked_v(f"Cost {PER} (local time)", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch_.items()], ["cost"], {"cost": "var(--accent)"}, BUCKET_WORD.capitalize(), "USD", w=620, h=320)))
+                  toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
     if gran != "hour":
         # keep the live feel: last 24 hours by hour, from the unclipped sessions
         th24 = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
-        ch24 = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
+        ch24 = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
         if any(sum(c.values()) for c in th24.values()):
+            tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
             ov.append(two(flex(stacked_v("Last 24 hours: assistant turns per hour", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300), legend(ALL_MCOLS, "Model")),
-                          stacked_v("Last 24 hours: cost per hour", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch24.items()], ["cost"], {"cost": "var(--accent)"}, "Hour", "USD", w=620, h=300)))
+                          toggle([("Cost", flex(stacked_v("Last 24 hours: cost per hour", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "Stacked by model", w=620, h=300), legend(ALL_MCOLS, "Model"))),
+                                  ("Tokens", flex(stacked_v("Last 24 hours: tokens per hour", [(l, dict(c)) for l, c in tk24.items()], TOKS, TOKC, "Hour", "Tokens", "Cached vs uncached input, plus output", w=620, h=300), legend(TOKC, "Token kind")))])))
     ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
     ov.append(OV.get("sankey", ""))
@@ -816,6 +833,7 @@ for k, lab, rv, sv, av, cut_, gran_ in views:
 H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
 H.append("<script>const showRange=k=>{const b=document.querySelector(`.toggle button[data-v='${k}']`);if(!b)return;document.querySelectorAll('.view').forEach(v=>v.style.display='none');const v=document.getElementById('view-'+k);v.style.display='';document.querySelectorAll('.toggle button').forEach(x=>x.classList.toggle('on',x===b));localStorage.setItem('cmdrange',k);const i=window.cmdtab||0;const tb=v.querySelectorAll('.tabs button')[i];if(tb)tb.click();};document.querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>showRange(b.dataset.v));const hp=new URLSearchParams(location.hash.slice(1));const ht=hp.get('tab');if(ht){const names=[...document.querySelectorAll('.tabs')][0].querySelectorAll('button');const idx=[...names].findIndex(x=>x.textContent.trim().toLowerCase()===ht.toLowerCase());if(idx>=0)window.cmdtab=idx;}showRange(hp.get('range')||'" + DEFAULT_VIEW + "');"
          "const setTh=t=>{document.documentElement.dataset.theme=t;localStorage.setItem('cmdtheme',t);document.querySelectorAll('.theme button').forEach(x=>x.classList.toggle('on',x.dataset.th===t));};document.querySelectorAll('.theme button').forEach(b=>b.onclick=()=>setTh(b.dataset.th));setTh(localStorage.getItem('cmdtheme')||'dark');</script>")
+H.append("<script>document.addEventListener('click',e=>{const b=e.target.closest('.seg.mini button');if(!b)return;const w=b.closest('.tgwrap'),id=b.parentElement.dataset.tg;w.querySelectorAll(`.seg.mini[data-tg='${id}'] button`).forEach(x=>x.classList.toggle('on',x===b));w.querySelectorAll(`.tgpane[data-tg='${id}']`).forEach(p=>p.style.display=p.dataset.i===b.dataset.i?'':'none');});</script>")
 H.append("<script>document.addEventListener('click',e=>{const th=e.target.closest('table.sortable th');if(!th)return;const tbl=th.closest('table'),i=[...th.parentNode.children].indexOf(th),rows=[...tbl.querySelectorAll('tr')].slice(1),tb=rows[0]&&rows[0].parentNode;if(!tb)return;if(!tbl._orig)tbl._orig=rows.slice();const state=th.classList.contains('desc')?'asc':th.classList.contains('asc')?'reset':'desc';tbl.querySelectorAll('th').forEach(x=>x.classList.remove('asc','desc'));tbl.classList.remove('sorted');tbl.querySelectorAll('td').forEach(td=>{td.style.background='';td.classList.remove('sortcol')});if(state==='reset'){tbl._orig.forEach(r=>tb.appendChild(r));return;}th.classList.add(state);tbl.classList.add('sorted');const asc=state==='asc';const val=r=>{const s=r.children[i].textContent.trim().replace(/[$,%]/g,'');const m=s.match(/^(-?[\\d.]+)\\s*([kM])?$/);return m?parseFloat(m[1])*(m[2]==='k'?1e3:m[2]==='M'?1e6:1):s.toLowerCase()};rows.slice().sort((a,b)=>{const x=val(a),y=val(b);return (typeof x==='number'&&typeof y==='number')?(asc?x-y:y-x):(asc?String(x).localeCompare(String(y)):String(y).localeCompare(String(x)))}).forEach(r=>tb.appendChild(r));const vals=rows.map(val);const nums=vals.filter(v=>typeof v==='number');const lo=Math.min(...nums),hi=Math.max(...nums);rows.forEach((r,j)=>{const td=r.children[i];if(!td)return;td.classList.add('sortcol');if(typeof vals[j]==='number'&&hi>lo)td.style.background=`color-mix(in srgb, var(--accent) ${Math.round(6+44*(vals[j]-lo)/(hi-lo))}%, transparent)`;});});</script>")
 open(OUT, "w").write("\n".join(H))
 print("wrote", OUT, "| bullets", len(rows), "| sessions", len(sessions), "| activations", len(acts), "steering", sum(1 for a in acts if a["steer"]))
