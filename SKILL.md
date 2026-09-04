@@ -45,7 +45,7 @@ Six tabs. Each answers one question; charts are not repeated across tabs.
 5. **Usage**: session timeline bubble chart, prompts per week, tool calls, and prompt openings, prompt length, prompts by hour and weekday each stacked by the model the session ran; sessions table (collapsed, sortable).
 6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, bullet length, base prompt size per session, bullets added over time, never-activated bullets, longest bullets, duplicates.
 
-Global controls: Today / 7 days / 30 days / All time (defaults to the shortest range with sessions and applies to every tab, including which bullets count as learned in range), Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
+Global controls: Today (trailing 24 h, hourly charts, local time) / 7 days / 30 days / All time. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
 
 ## Definitions the script uses (keep these consistent if you change anything)
 
@@ -57,6 +57,7 @@ Global controls: Today / 7 days / 30 days / All time (defaults to the shortest r
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
 - **Bullet date**: earliest learned-from session sharing ≥3 distinctive words with the bullet; undated bullets are interpolated between dated neighbours in file order.
 - **Cost**: `usage.costUsd` as logged; free tiers show 0.
+- **Loop intensity**: bullets written + bullets consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.
 - **Compact numbers**: 40.1k, 1.2M everywhere; trailing zeros trimmed.
 
 ## Design rules (for anyone extending the page)

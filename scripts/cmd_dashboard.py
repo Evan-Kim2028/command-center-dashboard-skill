@@ -139,7 +139,7 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
     if os.path.exists(mf): meta = json.load(open(mf))
     S = dict(sid=sid, title=redact(meta.get("title") or ""), asst=0, user=0, cites=0, steer=0, inp=0, out=0, cr=0, cw=0, cost=0.0,
              models=collections.Counter(), tools=collections.Counter(), first=None, last=None, first_in=None, prompts=[], push=0,
-             push_after_cite=0, push_after_nocite=0, turns_cite=0, turns_nocite=0, think_chars=0, bullets_hit=collections.Counter(), pm=collections.defaultdict(collections.Counter), skills=collections.Counter())
+             push_after_cite=0, push_after_nocite=0, turns_cite=0, turns_nocite=0, think_chars=0, bullets_hit=collections.Counter(), pm=collections.defaultdict(collections.Counter), skills=collections.Counter(), turns=[])
     last_turn_cited = False
     tool_names = {}; prev_time = None
     def _ts(t):
@@ -165,20 +165,21 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
                     PMx = S["pm"][mdl]; PMx["secs"] += dur; PMx["out_timed"] += u["outputTokens"]; PMx["timed"] += 1
                     tps_samples.append((mdl, u["outputTokens"] / dur))
             PM = S["pm"][mdl]; PM["asst"] += 1; PM["inp"] += u.get("inputTokens", 0); PM["out"] += u.get("outputTokens", 0); PM["cr"] += u.get("cacheReadTokens", 0); PM["cost"] += u.get("costUsd", 0) or 0
+            TR_ = dict(ts=ts, model=mdl, inp=u.get("inputTokens", 0), out=u.get("outputTokens", 0), cr=u.get("cacheReadTokens", 0), cw=u.get("cacheWriteTokens", 0), cost=u.get("costUsd", 0) or 0, think=0, cited=False, steer=0, tools=[], skills=[]); S["turns"].append(TR_)
             S["inp"] += u.get("inputTokens", 0); S["out"] += u.get("outputTokens", 0)
             S["cr"] += u.get("cacheReadTokens", 0); S["cw"] += u.get("cacheWriteTokens", 0); S["cost"] += u.get("costUsd", 0) or 0
             if S["first_in"] is None and u.get("inputTokens"): S["first_in"] = u["inputTokens"]
             cited_here = False
             for c in m.get("content", []):
                 if c.get("type") == "tool_use":
-                    S["tools"][c.get("name")] += 1; tool_names[c.get("id")] = c.get("name")
+                    S["tools"][c.get("name")] += 1; tool_names[c.get("id")] = c.get("name"); TR_["tools"].append(c.get("name"))
                     if c.get("name") == "activate_skill":
-                        S["skills"][(c.get("input") or {}).get("name") or "(unnamed)"] += 1; skill_events.append(dict(sid=sid, date=ts[:10], skill=(c.get("input") or {}).get("name") or "(unnamed)", turn=S["asst"]))
+                        skn = (c.get("input") or {}).get("name") or "(unnamed)"; S["skills"][skn] += 1; TR_["skills"].append(skn); skill_events.append(dict(sid=sid, date=ts[:10], ts=ts, skill=skn, turn=S["asst"]))
                 if c.get("type") == "thinking":
-                    th = c.get("thinking", ""); S["think_chars"] += len(th); PM["think"] += len(th)
+                    th = c.get("thinking", ""); S["think_chars"] += len(th); PM["think"] += len(th); TR_["think"] += len(th)
                     if cite_pat.search(th):
-                        S["cites"] += 1; cited_here = True; PM["cites"] += 1
-                        steer = bool(steer_pat.search(th)); S["steer"] += steer; PM["steer"] += steer
+                        S["cites"] += 1; cited_here = True; PM["cites"] += 1; TR_["cited"] = True
+                        steer = bool(steer_pat.search(th)); S["steer"] += steer; PM["steer"] += steer; TR_["steer"] += steer
                         # attribute to bullets: look at windows around 'taste'
                         for mm in re.finditer(r"taste", th, re.I):
                             win = th[max(0, mm.start() - 300): mm.end() + 300].lower()
@@ -186,7 +187,7 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
                             best = max(range(len(rows)), key=lambda k: len(brare[k] & wt))
                             sc = len(brare[best] & wt)
                             if sc >= 2:
-                                acts.append(dict(sid=sid, date=ts[:10], b=best, steer=steer, turn=S["asst"], model=mdl))
+                                acts.append(dict(sid=sid, date=ts[:10], ts=ts, b=best, steer=steer, turn=S["asst"], model=mdl))
                                 S["bullets_hit"][best] += 1
                                 if steer and len(steer_quotes) < 400:
                                     q = th[max(0, mm.start() - 160): mm.end() + 220].replace("\n", " ")
@@ -199,8 +200,9 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
             for c in m.get("content", []):
                 if c.get("type") == "text":
                     t = c.get("text", ""); S["user"] += 1
-                    S["prompts"].append((ts, redact(t)))
-                    if not t.lstrip().startswith("Error:") and push_pat.search(t[:200]):
+                    is_push = bool(not t.lstrip().startswith("Error:") and push_pat.search(t[:200]))
+                    S["prompts"].append((ts, redact(t), is_push, last_turn_cited))
+                    if is_push:
                         S["push"] += 1
                         if last_turn_cited: S["push_after_cite"] += 1
                         else: S["push_after_nocite"] += 1
@@ -215,6 +217,27 @@ for f in sorted(glob.glob(f"{SESS}/*.jsonl")):
     except Exception: S["minutes"] = 0
     sessions.append(S)
 sessions.sort(key=lambda s: s["date"])
+
+def clip_session(S, cut):
+    """Copy of a session with every aggregate recomputed from turns/prompts at or after ISO timestamp `cut`."""
+    T = [t for t in S["turns"] if t["ts"] >= cut]; P = [p for p in S["prompts"] if p[0] >= cut]
+    if not T: return None
+    C = dict(S); C["turns"] = T; C["prompts"] = P
+    C["asst"] = len(T); C["user"] = len(P)
+    for k in ("inp", "out", "cr", "cw", "cost"): C[k] = sum(t[k] for t in T)
+    C["think_chars"] = sum(t["think"] for t in T); C["cites"] = sum(1 for t in T if t["cited"]); C["steer"] = sum(t["steer"] for t in T)
+    C["turns_cite"] = C["cites"]; C["turns_nocite"] = len(T) - C["cites"]
+    C["tools"] = collections.Counter(n for t in T for n in t["tools"]); C["skills"] = collections.Counter(n for t in T for n in t["skills"])
+    C["models"] = collections.Counter(t["model"] for t in T); C["model"] = C["models"].most_common(1)[0][0]
+    pm = collections.defaultdict(collections.Counter)
+    for t in T:
+        Q = pm[t["model"]]; Q["asst"] += 1; Q["inp"] += t["inp"]; Q["out"] += t["out"]; Q["cr"] += t["cr"]; Q["cost"] += t["cost"]; Q["think"] += t["think"]; Q["cites"] += t["cited"]; Q["steer"] += t["steer"]
+    C["pm"] = pm
+    C["push"] = sum(1 for p in P if p[2]); C["push_after_cite"] = sum(1 for p in P if p[2] and p[3]); C["push_after_nocite"] = sum(1 for p in P if p[2] and not p[3])
+    ts_all = [t["ts"] for t in T] + [p[0] for p in P]; C["first"] = min(ts_all); C["last"] = max(ts_all); C["date"] = C["first"][:10]
+    try: C["minutes"] = round((datetime.datetime.fromisoformat(C["last"].rstrip("Z")) - datetime.datetime.fromisoformat(C["first"].rstrip("Z"))).total_seconds() / 60)
+    except Exception: C["minutes"] = 0
+    return C
 cfg = json.load(open(CFG))["tasteOnboarding"] if os.path.exists(CFG) else {}
 learned = {k: len(v) for k, v in cfg.get("learnedSessions", {}).items()}
 skipped = {k: len(v) for k, v in cfg.get("skippedSessions", {}).items()}
@@ -388,8 +411,29 @@ table.sortable th,table th[data-k]{cursor:pointer;user-select:none}table.sorted 
 </style>"""]
 
 ROWS_ALL = rows
-def build(SUF, rows, sessions, acts, rows_r=None):
+def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     rows_r = rows if rows_r is None else rows_r
+    def _local(ts):
+        try: return datetime.datetime.fromisoformat(ts.rstrip("Z")).replace(tzinfo=datetime.timezone.utc).astimezone()
+        except Exception: return None
+    def hour_buckets():
+        end = datetime.datetime.now().replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+        out = []
+        for i in range(24, 0, -1):
+            st = end - datetime.timedelta(hours=i); out.append((st.strftime("%H:00"), st.astimezone(datetime.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")))
+        return out
+    def by_hour(items, key):
+        B = hour_buckets(); lbls = [b[0] for b in B]; starts = [b[1] for b in B]
+        res = collections.OrderedDict((l, collections.Counter()) for l in lbls)
+        for it in items:
+            t = key(it)
+            if not t: continue
+            idx = bisect.bisect_right(starts, t) - 1
+            if 0 <= idx < 24: res[lbls[idx]][it.get("_s", "n")] += it.get("_v", 1)
+        return res
+    last_ts = max([t["ts"] for s_ in sessions for t in s_["turns"]] + ["0"])
+    last_local = _local(last_ts) if last_ts != "0" else None
+    ago_min = round((datetime.datetime.now(datetime.timezone.utc) - last_local).total_seconds() / 60) if last_local else None
     H = []
     dc_all = collections.Counter(r["domain"] for r in rows)
     KEEP = {d for d, _ in dc_all.most_common(3)}
@@ -480,7 +524,10 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     top_b = sorted(rows, key=lambda r: -r["acts"])[:15]
     c3 = hbars("Most activated bullets", [(f"#{r['i']} " + r["text"][:28] + "…", r["acts"], r["text"]) for r in top_b], "Activations", "Hover a bar for the full bullet", ylabel="Bullet", lw=260, w=620)
     days = sorted(set(a["date"] for a in acts))
-    c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
+    if gran == "hour":
+        hb_ = by_hour([dict(_s="steering" if a["steer"] else "mention", ts=a["ts"]) for a in acts], lambda a: a["ts"][:19])
+        c4 = stacked_v("Activations per hour (last 24h, local)", [(l, dict(c)) for l, c in hb_.items()], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Hour", "Activations", w=620, h=520)
+    else: c4 = "" if not days else (stacked_v("Activations per day", [(dd[5:], {"steering": sum(1 for a in acts if a["date"] == dd and a["steer"]), "mention": sum(1 for a in acts if a["date"] == dd and not a["steer"])}) for dd in days], ["steering", "mention"], {"steering": "var(--bar)", "mention": "var(--bar2)"}, "Day", "Activations", w=620, h=520))
     H.append(two(c3, c4))
     pc = sum(s["push_after_cite"] for s in sessions); pn = sum(s["push_after_nocite"] for s in sessions); tcn = sum(s["turns_cite"] for s in sessions); tnn = sum(s["turns_nocite"] for s in sessions)
     h3("Does the user push back less after taste-guided turns?")
@@ -519,10 +566,16 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     tw_rows = []
     for m in ml:
         t_ = pm[m]["asst"]; w_ = written.get(m, 0); a_ = ma[m]
-        tw_rows.append((m, t_, w_, round(100 * w_ / max(1, t_), 2), a_, round(100 * a_ / max(1, t_), 1), round(100 * ms[m] / max(1, a_)), round(a_ / max(1, w_), 1) if w_ else "—"))
+        wr_ = 100 * w_ / max(1, t_); cr_ = 100 * a_ / max(1, t_)
+        bal = round(100 * cr_ / (wr_ + cr_)) if (wr_ + cr_) > 0 else "—"
+        tw_rows.append((m, t_, w_, round(wr_, 2), a_, round(cr_, 1), round(100 * ms[m] / max(1, a_)), round(wr_ + cr_, 1), bal))
     h3("Two-way influence: model ↔ taste")
     H.append("<p class=charttip>Model → taste: bullets the learner wrote from that model's sessions (a harness update). Taste → model: how often that model's reasoning consulted a bullet. Bullets are attributed to the whole file, activations to the selected range.</p>")
-    H.append(table(["Model", "#Turns", "#Bullets written", "#Written per 100 turns", "#Activations", "#Activations per 100 turns", "#Steering share %", "#Activations per bullet written"], tw_rows))
+    H.append(table(["Model", "#Turns", "#Bullets written", "#Written per 100 turns", "#Activations", "#Consulted per 100 turns", "#Steering share %", "#Loop intensity", "#Consumer share %"], tw_rows))
+    H.append("<p class=charttip><b>Loop intensity</b> = written + consulted per 100 turns: how much taste traffic a model generates in either direction. <b>Consumer share</b> = consulted ÷ (written + consulted): 0% means the model only feeds taste, 100% means it only uses it, 50% is balanced. Both are per-turn rates, so models with different session lengths compare fairly.</p>")
+    bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
+    H.append(two(hbars("Consumer share by model", bal_items, "Consulted ÷ (written + consulted), %", "0 = only feeds taste · 50 = balanced · 100 = only uses taste", ylabel="Model", lw=230, w=620),
+                 hbars("Loop intensity by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Taste events per 100 turns (written + consulted)", "How much taste traffic the model generates", ylabel="Model", lw=230, w=620)))
     tw_pairs = [(m, {"written / 100 turns": round(100 * written.get(m, 0) / max(1, pm[m]["asst"]), 1), "consulted / 100 turns": round(100 * ma[m] / max(1, pm[m]["asst"]), 1)}) for m in ml]
     tw_cols = {"written / 100 turns": "var(--accent)", "consulted / 100 turns": "var(--bar)"}
     OV["twoway"] = flex(stacked_h("Model → taste vs taste → model", [(m, {k: v for k, v in d.items()}) for m, d in tw_pairs], list(tw_cols), tw_cols, "Per 100 assistant turns", "Model", "Blue = bullets the model's sessions produced. Grey = times the model consulted taste.", w=620), legend(tw_cols, "Direction"))
@@ -538,25 +591,37 @@ def build(SUF, rows, sessions, acts, rows_r=None):
 
     # ================= USAGE =================
     tab("Usage")
-    allp = [t for s in sessions for _, t in s["prompts"] if t.strip()]
+    allp = [t for s in sessions for _, t, *_x in s["prompts"] if t.strip()]
     lens = sorted(len(t) for t in allp) or [0]
     H.append(kpi([("sessions", len(sessions), ""), ("user prompts", len(allp), "Messages you typed, excluding tool results."), ("assistant turns", fmt(sum(s['asst'] for s in sessions)), "Model responses, including tool-calling steps. Many turns per prompt means long autonomous runs."), ("minutes", fmt(sum(s['minutes'] for s in sessions)), "Wall-clock time from first to last message per session."), ("cost per prompt", f"${tot_cost/max(1,len(allp)):.2f}", ""), ("median prompt chars", lens[len(lens)//2], "")]))
     # session timeline: x = date, y = assistant turns, bubble = minutes, color = model
-    sd0 = datetime.date.fromisoformat(sessions[0]["date"]); sd1 = datetime.date.fromisoformat(sessions[-1]["date"]); sspan = max(1, (sd1 - sd0).days)
     TW, TH, TL, TB, TR = 1240, 380, 70, 60, 30; mxt = max(s["asst"] for s in sessions) or 1
-    tx = lambda d: TL + 20 + (datetime.date.fromisoformat(d) - sd0).days / sspan * (TW - TL - TR - 40); ty = lambda v: TH - TB - v / mxt * (TH - TB - 60)
-    out = [svg_open(TW, TH), title_block(TW, "Session timeline", "Each bubble is a session. Height = assistant turns, size = minutes, color = model. Hover for details.")]
+    ty = lambda v: TH - TB - v / mxt * (TH - TB - 60)
+    if gran == "hour":
+        t_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
+        tx = lambda ts_: TL + 20 + max(0.0, min(1.0, ((_local(ts_) or t_start) - t_start).total_seconds() / 86400)) * (TW - TL - TR - 40)
+        sub_t = "Last 24 hours, local time. Each bubble is a session at its first message; height = assistant turns, size = minutes, color = model."
+    else:
+        sd0 = datetime.date.fromisoformat(sessions[0]["date"]); sd1 = datetime.date.fromisoformat(sessions[-1]["date"]); sspan = max(1, (sd1 - sd0).days)
+        tx = lambda ts_: TL + 20 + (datetime.date.fromisoformat(ts_[:10]) - sd0).days / sspan * (TW - TL - TR - 40)
+        sub_t = "Each bubble is a session. Height = assistant turns, size = minutes, color = model. Hover for details."
+    out = [svg_open(TW, TH), title_block(TW, "Session timeline", sub_t)]
     for v in range(0, mxt + 1, max(1, math.ceil(mxt / 5))): out.append(L(TL, ty(v), TW - TR, ty(v), "var(--grid)", 1)); out.append(T(TL - 8, ty(v) + 4, fmt(v), anchor="end"))
-    d = sd0 - datetime.timedelta(days=sd0.weekday())
-    while d <= sd1 + datetime.timedelta(days=7):
-        px = tx(d.isoformat())
-        if TL <= px <= TW - TR: out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, d.strftime("%b %d"), anchor="middle"))
-        d += datetime.timedelta(days=7)
+    if gran == "hour":
+        for i, (lbl, st_) in enumerate(hour_buckets()):
+            if i % 3: continue
+            px = TL + 20 + i / 24 * (TW - TL - TR - 40); out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, lbl, anchor="middle"))
+    else:
+        d = sd0 - datetime.timedelta(days=sd0.weekday())
+        while d <= sd1 + datetime.timedelta(days=7):
+            px = tx(d.isoformat())
+            if TL <= px <= TW - TR: out.append(L(px, 50, px, TH - TB, "var(--grid)", 1)); out.append(T(px, TH - TB + 16, d.strftime("%b %d"), anchor="middle"))
+            d += datetime.timedelta(days=7)
     out.append(L(TL, 50, TL, TH - TB)); out.append(L(TL, TH - TB, TW - TR, TH - TB))
-    out.append(T((TL + TW - TR) / 2, TH - 12, "Date", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
+    out.append(T((TL + TW - TR) / 2, TH - 12, "Time (local)" if gran == "hour" else "Date", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
     for s in sorted(sessions, key=lambda s: -s["minutes"]):
         r = 4 + math.sqrt(max(1, s["minutes"])) * 0.55
-        out.append(f"<circle cx='{tx(s['date']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {s['cites']} taste activations</title></circle>")
+        out.append(f"<circle cx='{tx(s['first']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {s['cites']} taste activations</title></circle>")
     OV["timeline"] = flex("".join(out) + "</svg>", legend(mcols, "Model"))
     H.append(OV["timeline"])
     weeks_u = collections.OrderedDict()
@@ -572,7 +637,7 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     slash = 0
     for s in sessions:
         mdl_s = s["model"]
-        for ts, t in s["prompts"]:
+        for ts, t, *_x in s["prompts"]:
             if not t.strip(): continue
             try: dt = datetime.datetime.fromisoformat(ts.rstrip("Z")); hours[dt.hour][mdl_s] += 1; wdays[dt.strftime("%a")][mdl_s] += 1
             except Exception: pass
@@ -586,7 +651,12 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     open_chart = flex(stacked_h("How prompts open (first two words)", [(o, dict(opens[o])) for o in top_open], ml, mcols, "Prompts", "Opening", f"{slash} prompts were slash commands · stacked by model", w=620), mleg)
     len_keys = sorted(plens, key=lambda k: 10**6 if k == "1000+" else int(k.split("–")[0]))
     len_chart = flex(stacked_h("Prompt length", [(k, dict(plens[k])) for k in len_keys], ml, mcols, "Prompts", "Characters", "Stacked by model", w=620), mleg)
-    H.append(two(stacked_v("Prompts per week", [(wk[5:], {"prompts": c["prompts"]}) for wk, c in weeks_u.items()], ["prompts"], {"prompts": "var(--bar)"}, "Week starting", "Prompts", w=620, h=300), tools_chart)); H.append(two(open_chart, len_chart)); H.append(two(hour_chart, wday_chart))
+    if gran == "hour":
+        ph = by_hour([dict(_s=s_["model"], ts=p[0]) for s_ in sessions for p in s_["prompts"] if p[1].strip()], lambda a: a["ts"][:19])
+        act_chart = flex(stacked_v("Prompts per hour (last 24h, local)", [(l, dict(c)) for l, c in ph.items()], ml, mcols, "Hour", "Prompts", w=620, h=300), legend(mcols, "Model"))
+    else: act_chart = stacked_v("Prompts per week", [(wk[5:], {"prompts": c["prompts"]}) for wk, c in weeks_u.items()], ["prompts"], {"prompts": "var(--bar)"}, "Week starting", "Prompts", w=620, h=300)
+    H.append(two(act_chart, tools_chart)); H.append(two(open_chart, len_chart))
+    if gran != "hour": H.append(two(hour_chart, wday_chart))
 
     # ================= HEALTH =================
     tab("Health")
@@ -615,6 +685,28 @@ def build(SUF, rows, sessions, acts, rows_r=None):
     H.append("</div>")
     ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Cost, speed and taste at a glance.</p>"]
     ov.append(kpi([("logged cost", f"${tot_cost:,.2f}", "What the provider billed in this range. Free tiers show $0."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste bullet."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused bullets", len(never), "Bullets injected into every prompt but never consulted in this range.")]))
+    ins = []
+    if ml:
+        top_cost = max(ml, key=lambda m: pm[m]["cost"]); tc_ = pm[top_cost]["cost"]
+        if tot_cost > 0: ins.append(f"<b>{esc(top_cost)}</b> accounts for {100*tc_/tot_cost:.0f}% of logged cost with {100*pm[top_cost]['asst']/max(1,sum(s['asst'] for s in sessions)):.0f}% of turns.")
+        rate = {m: 100 * ma[m] / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
+        if len(rate) >= 2:
+            hi_m = max(rate, key=rate.get); lo_m = min(rate, key=rate.get)
+            ins.append(f"Taste is consulted most by <b>{esc(hi_m)}</b> ({rate[hi_m]:.0f} per 100 turns) and least by <b>{esc(lo_m)}</b> ({rate[lo_m]:.1f}).")
+        wr = {m: 100 * written.get(m, 0) / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
+        if wr and max(wr.values()) > 0:
+            w_m = max(wr, key=wr.get)
+            ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new bullets ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per bullet written.")
+        fast = max((m for m in ml if tps_med.get(m)), key=lambda m: tps_med[m], default=None)
+        if fast: ins.append(f"Fastest model: <b>{esc(fast)}</b> at {tps_med[fast]:.0f} output tok/s (median turn).")
+    ins.append(f"{len(never)} of {len(rows)} bullets ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
+    if gran == "hour" and ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
+    ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
+    if gran == "hour":
+        th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+        ch_ = by_hour([dict(_s="cost", _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
+        ov.append(two(flex(stacked_v("Assistant turns per hour (last 24h, local)", [(l, dict(c)) for l, c in th_.items()], ml, mcols, "Hour", "Turns", w=620, h=320), legend(mcols, "Model")),
+                      stacked_v("Cost per hour (last 24h, local)", [(l, {"cost": round(c["cost"], 3)}) for l, c in ch_.items()], ["cost"], {"cost": "var(--accent)"}, "Hour", "USD", w=620, h=320)))
     ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one bullet; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
     ov.append(two(OV.get("twoway", ""), OV.get("work", "")))
@@ -626,20 +718,20 @@ def build(SUF, rows, sessions, acts, rows_r=None):
 
     return H
 
-def _cut(days): return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-RANGES = [("1d", "Today", 1), ("7d", "7 days", 7), ("30d", "30 days", 30), ("all", "All time", None)]
+NOW = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+def _cut_ts(hours): return (NOW - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z") if hours else "0000"
+RANGES = [("24h", "Today", 24), ("7d", "7 days", 168), ("30d", "30 days", 720), ("all", "All time", None)]
 views = []
-for k, lab, days in RANGES:
-    c = _cut(days - 1) if days else "0000"
-    views.append((k, lab, rows, [s for s in sessions if s["date"] >= c], [a for a in acts if a["date"] >= c]))
-# default: the shortest range that has any sessions; the taste file itself is always shown in full
-DEFAULT_VIEW = next((k for k, _, _, sv, _ in views if sv), "all")
-H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names redacted · " if PUBLIC else "") + f"Rendered {datetime.date.today()} · <code>{esc(redact(TASTE))}</code></p></div>")
+for k, lab, hours in RANGES:
+    c = _cut_ts(hours)
+    sv = [x for x in (clip_session(s_, c) for s_ in sessions) if x] if hours else sessions
+    views.append((k, lab, rows, sv, [a for a in acts if a["ts"] >= c], c, "hour" if k == "24h" else "day"))
+DEFAULT_VIEW = next((k for k, _, _, sv, *_ in views if sv), "all")
+H.append("<div class=topbar><div><h1>Command Code dashboard</h1><p class=sub>" + ("Public build, names redacted · " if PUBLIC else "") + f"Rendered {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} local · re-run the script to refresh · <code>{esc(redact(TASTE))}</code></p></div>")
 H.append("<div style='display:flex;gap:10px;align-items:center'><div class='seg toggle'>" + "".join(f"<button data-v='{k}'>{lab}</button>" for k, lab, *_ in views) + f"</div><div class='seg theme'><button data-th='dark'>Dark</button><button data-th='light'>Light</button></div></div></div>")
-for k, lab, rv, sv, av in views:
+for k, lab, rv, sv, av, cut_, gran_ in views:
     H.append(f"<div class=view id='view-{k}'" + (" style='display:none'" if k != DEFAULT_VIEW else "") + ">")
-    _days = dict((x, y) for x, _, y in RANGES)[k]
-    if rv and sv: H += build("-" + k, rv, sv, av, [r for r in rows if r["date"] >= (_cut(_days - 1) if _days else "0000")])
+    if rv and sv: H += build("-" + k, rv, sv, av, [r for r in rows if r["date"] >= cut_[:10]], gran=gran_, cut=cut_)
     else: H.append(f"<p class=muted style='padding:24px 0'>No cmd sessions in this range. Pick a wider range above.</p>")
     H.append("</div>")
 H.append("<script>document.querySelectorAll('.tabs').forEach(bar=>{const bs=[...bar.querySelectorAll('button')];bs.forEach((b,i)=>{b.onclick=()=>{bs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=bar.parentElement;v.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));v.querySelector('#tab-'+b.dataset.tab).classList.add('on');window.cmdtab=i;};});bs[0].click();});</script>")
