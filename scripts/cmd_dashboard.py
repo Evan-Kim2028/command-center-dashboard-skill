@@ -957,15 +957,6 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Tokens", f"By model · {cache_share:.0f}% of input from cache", w=620, h=320, leg=legend(mcols, "Model"), nested=True)
     ov.append(two(tseries(f"Assistant Turns {PER.title()}", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
                   toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
-    if gran != "hour":
-        # keep the live feel: last 24 hours by hour, from the unclipped sessions
-        th24 = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
-        ch24 = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in ALL_SESSIONS for t in s_["turns"]], lambda a: a["ts"][:19], size_h=1, n=24)
-        if any(sum(c.values()) for c in th24.values()):
-            tk24 = by_hour(tok_items(ALL_SESSIONS), lambda a: a["ts"][:19], size_h=1, n=24)
-            ov.append(two(tseries("Assistant Turns per Hour, Last 24 Hours", [(l, dict(c)) for l, c in th24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Turns", w=620, h=300, leg=legend(ALL_MCOLS, "Model")),
-                          toggle([("Cost", tseries("Cost per Hour, Last 24 Hours", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "USD", "By session model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"), nested=True)),
-                                  ("Tokens", tseries("Tokens per Hour, Last 24 Hours", [(l, dict(c)) for l, c in tk24.items()], [m for m in ALL_MODELS], ALL_MCOLS, "Hour", "Tokens", "Input + output by model", w=620, h=300, leg=legend(ALL_MCOLS, "Model"), nested=True))])))
     h3("Cost and speed", ov)
     ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
