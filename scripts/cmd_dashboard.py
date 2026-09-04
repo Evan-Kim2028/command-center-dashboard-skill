@@ -11,6 +11,7 @@ ap.add_argument("--out", default=None)
 ap.add_argument("--no-open", action="store_true")
 ap.add_argument("--redact", default=None, help="JSON file with extra [[pattern, replacement], ...]")
 ap.add_argument("--list", action="store_true", help="list Command Code project dirs found on this machine and exit")
+ap.add_argument("--offline", action="store_true", help="skip the read-only call to api.commandcode.ai for provider-billed totals")
 A = ap.parse_args()
 HOME = os.path.expanduser("~")
 PROJ = os.path.abspath(A.project)
@@ -148,6 +149,20 @@ def _load_catalog():
             if cat: return cat, pth
     return {}, None
 CATALOG, CATALOG_PATH = _load_catalog()
+_BILL_CACHE = {}
+def provider_usage(since_iso):
+    """Read-only: the provider's own billed total since an ISO timestamp, via the same endpoint the CLI's /usage uses. None if offline or unauthenticated."""
+    if A.offline or since_iso in _BILL_CACHE: return _BILL_CACHE.get(since_iso)
+    try:
+        import urllib.request, urllib.parse
+        auth = json.load(open(f"{CC_HOME}/auth.json")); key = auth.get("apiKey")
+        if not key: return None
+        q = f"?since={urllib.parse.quote(since_iso)}" if since_iso and since_iso != "0000" else "?since=2000-01-01T00:00:00Z"
+        req = urllib.request.Request("https://api.commandcode.ai/alpha/usage/summary" + q, headers={"Authorization": f"Bearer {key}", "User-Agent": "cli", "x-cli-environment": "production"})
+        with urllib.request.urlopen(req, timeout=8) as r: d = json.loads(r.read().decode())
+        out = dict(cost=float(d.get("totalCost", 0)), requests=int(d.get("totalCount", 0)), tokens_in=int(d.get("totalTokensIn", 0)), tokens_out=int(d.get("totalTokensOut", 0)))
+    except Exception: out = None
+    _BILL_CACHE[since_iso] = out; return out
 def price_turn(model, inp, cr, cw, out, logged):
     """USD for one turn from catalog list prices: uncached input, cached input, output. Falls back to the logged figure."""
     p = CATALOG.get(model)
@@ -678,7 +693,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     tps_med = {m: med([v for mm, v in tps_samples if mm == m]) for m in ml}
     H.append(kpi([("models used", len(ml), "Distinct models that produced at least one assistant turn."), ("output tok/s (median)", round(med([v for _, v in tps_samples]), 1), "Output tokens divided by turn duration, median across all timed turns. Network latency is still inside the clock."), ("output tok/turn", fmt(round(tot_out / max(1, sum(s['asst'] for s in sessions)))), "Average output tokens per assistant turn, reasoning included."), ("thinking chars/turn", fmt(round(sum(pm[m]["think"] for m in ml) / max(1, sum(s['asst'] for s in sessions)))), "Visible reasoning produced per turn. More reasoning leaves more room to consult taste."), ("output tokens", fmt(tot_out), "Everything the models generated, reasoning included.")]))
     cat_note = (f" Cost is priced from Command Code's bundled model catalog (uncached input, cached input at the cache rate, output) for {PRICED['catalog']} of {PRICED['catalog'] + PRICED['logged']} turns; models missing from the catalog use the CLI-logged figure." if CATALOG else " Cost is the CLI-logged figure; the model catalog was not found on this machine.")
-    H.append("<p class=charttip>Attributed per message from each reply's own model and usage record. Output tok/s is the wall-clock speed you waited for, median per turn. Free tiers log $0." + cat_note + " The CLI-logged column charges cached input at the full input rate, so it overstates cache-heavy models." + "</p>")
+    H.append("<p class=charttip>Attributed per message from each reply's own model and usage record. Output tok/s is the wall-clock speed you waited for, median per turn. Free tiers log $0." + cat_note + " The CLI-logged column charges cached input at the full input rate, so it overstates cache-heavy models." + (f" Provider-billed total for this range: ${provider_usage(cut)['cost']:,.2f} (from api.commandcode.ai, totals only)." if provider_usage(cut) else "") + "</p>")
     H.append(table(["Model", "#Turns", "#Input tokens", "#Cache hit %", "#Output tokens", "#Cost $", "#CLI-logged $", "#Input tok/turn", "#Output tok/turn", "#Output tok/s", "#Thinking chars/turn", "#Activations /100 turns", "#Steering share %"], [(m, pm[m]["asst"], fmt(pm[m]["inp"]), round(100 * pm[m]["cr"] / max(1, pm[m]["inp"])), fmt(pm[m]["out"]), round(pm[m]["cost"], 2), round(pm[m]["logged"], 2), fmt(round(pm[m]["inp"] / max(1, pm[m]["asst"]))), fmt(round(pm[m]["out"] / max(1, pm[m]["asst"]))), round(tps_med[m], 1), round(pm[m]["think"] / max(1, pm[m]["asst"])), round(100 * ma[m] / max(1, pm[m]["asst"]), 1), round(100 * ms[m] / max(1, ma[m]))) for m in ml]))
     H.append(two(hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620),
                  hbars("Output Tokens per Turn by Model", [(m, round(pm[m]["out"] / max(1, pm[m]["asst"])), "") for m in ml], "Output tokens per assistant turn", "Mean output tokens per assistant turn, reasoning included", ylabel="Model", lw=230, w=620)))
@@ -880,8 +895,11 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     if dups: h3("Near-duplicates"); H.append("<ul>" + "".join(f"<li>#{rows[i]['i']} ≈ #{rows[j]['i']}: {esc(rows[i]['text'][:100])}…</li>" for i, j in dups) + "</ul>")
     H.append("</div>")
     ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Cost, speed and taste at a glance.</p>"]
-    ov.append(kpi([("cost", f"${tot_cost:,.2f}", "Priced from Command Code's model catalog: uncached input, cached input at the cache rate, output. Free tiers are $0. Models missing from the catalog use the CLI-logged figure."), ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
+    bill = provider_usage(cut)
+    bill_kpi = [("billed by provider", f"${bill['cost']:,.2f}", f"Command Code's own usage ledger for this range ({fmt(bill['requests'])} requests, {fmt(bill['tokens_in'])} tokens in). The number your bill is based on.")] if bill else []
+    ov.append(kpi([("cost estimate", f"${tot_cost:,.2f}", "Priced per turn from Command Code's model catalog: uncached input, cached input at the cache rate, output. Free tiers are $0. Covers the sessions of this project only.")] + bill_kpi + [ ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
     ins = []
+    if bill and bill["cost"] > 0: ins.append(f"Provider billed <b>${bill['cost']:,.2f}</b> for this range; the per-model catalog estimate covers ${tot_cost:,.2f} ({100*tot_cost/bill['cost']:.0f}%). The gap is other projects, subagent calls, or catalog drift.")
     if ml:
         top_cost = max(ml, key=lambda m: pm[m]["cost"]); tc_ = pm[top_cost]["cost"]
         if tot_cost > 0: ins.append(f"<b>{esc(top_cost)}</b> accounts for {100*tc_/tot_cost:.0f}% of cost with {100*pm[top_cost]['asst']/max(1,sum(s['asst'] for s in sessions)):.0f}% of turns.")

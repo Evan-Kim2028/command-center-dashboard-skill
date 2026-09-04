@@ -6,7 +6,7 @@ description: Build a self-contained HTML dashboard of everything Command Code (c
 # Command Center dashboard
 
 One script turns the files Command Code already writes into a tabbed, dark-mode, single-file HTML dashboard.
-Nothing leaves the machine. No pip installs.
+No pip installs. The only network call is a read-only usage query to api.commandcode.ai with your own key (skip with `--offline`).
 
 ## Where the script is
 
@@ -74,7 +74,7 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - **Steering**: an activation whose sentence continues with so / should / must / instead / before / never / avoid / skip.
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
 - **Learning date**: earliest learned-from session sharing ≥3 distinctive words with the learning; undated learnings are interpolated between dated neighbours in file order.
-- **Cost**: priced per turn from Command Code's bundled model catalog (`dist/bundled/command-code-knowledge/reference/models.md`: `$in/$out · cache $c` per million) as uncached input × in + cached input × cache + output × out. The CLI's own `usage.costUsd` charges cached input at the full input rate and overstates cache-heavy models by up to ~12×; it is shown as "CLI-logged" for comparison and used only for models missing from the catalog. Neither is the provider's invoice; treat totals as list-price estimates.
+- **Cost**: priced per turn from Command Code's bundled model catalog (`dist/bundled/command-code-knowledge/reference/models.md`: `$in/$out · cache $c` per million) as uncached input × in + cached input × cache + output × out. The CLI's own `usage.costUsd` charges cached input at the full input rate and overstates cache-heavy models by up to ~12×; it is shown as "CLI-logged" for comparison and used only for models missing from the catalog. The dashboard also makes one read-only call per range to `https://api.commandcode.ai/alpha/usage/summary` with the key in `~/.commandcode/auth.json` (the same call the CLI's `/usage` makes) and shows the provider-billed total beside the estimate; pass `--offline` to skip it. That billed total is the 1:1 number; the per-model split is the catalog estimate.
 - Chart titles are presentation style: Title Case noun phrases ("Output Speed by Model"); subtitles state the measure and scope ("Median output tokens per second, wall clock"), never sentences addressed to the reader.
 - **Chain of thought**: thinking = visible reasoning text. Taste effect = mean thinking/reply length/tool calls on taste-consulting turns vs the same model's other thinking turns.
 - **Taste traffic** (was loop intensity): learnings written + learnings consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.

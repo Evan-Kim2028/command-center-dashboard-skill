@@ -2,7 +2,7 @@
 
 A single-file HTML dashboard of everything [Command Code](https://commandcode.ai) has learned and done on your machine: the taste file, when taste steers the model, per-model cost, tokens and speed, sessions, and taste-file health.
 
-Python 3.10+, no packages, nothing leaves your machine.
+Python 3.10+, no packages. One optional read-only call to api.commandcode.ai for your billed total (`--offline` to skip).
 
 ## Install
 
