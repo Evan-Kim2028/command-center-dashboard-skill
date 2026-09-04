@@ -569,16 +569,36 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         wr_ = 100 * w_ / max(1, t_); cr_ = 100 * a_ / max(1, t_)
         bal = round(100 * cr_ / (wr_ + cr_)) if (wr_ + cr_) > 0 else "—"
         tw_rows.append((m, t_, w_, round(wr_, 2), a_, round(cr_, 1), round(100 * ms[m] / max(1, a_)), round(wr_ + cr_, 1), bal))
-    h3("Two-way influence: model ↔ taste")
-    H.append("<p class=charttip>Model → taste: bullets the learner wrote from that model's sessions (a harness update). Taste → model: how often that model's reasoning consulted a bullet. Bullets are attributed to the whole file, activations to the selected range.</p>")
-    H.append(table(["Model", "#Turns", "#Bullets written", "#Written per 100 turns", "#Activations", "#Consulted per 100 turns", "#Steering share %", "#Loop intensity", "#Consumer share %"], tw_rows))
-    H.append("<p class=charttip><b>Loop intensity</b> = written + consulted per 100 turns: how much taste traffic a model generates in either direction. <b>Consumer share</b> = consulted ÷ (written + consulted): 0% means the model only feeds taste, 100% means it only uses it, 50% is balanced. Both are per-turn rates, so models with different session lengths compare fairly.</p>")
+    h3("Does the model teach taste, or use it?")
+    H.append("<p class=charttip>Two directions. <b>Creates</b>: new taste bullets the learner wrote from this model's sessions. <b>Uses</b>: times this model's reasoning consulted a bullet. Both are shown per 100 turns so long and short sessions compare fairly.</p>")
+    H.append(table(["Model", "#Turns", "#New bullets created", "#Created per 100 turns", "#Times taste used", "#Used per 100 turns", "#Uses that changed the plan %", "#Taste traffic per 100 turns", "#Share of traffic that is use %"], tw_rows))
+    H.append("<p class=charttip><b>Taste traffic</b> = created + used, per 100 turns: how much this model interacts with taste at all. <b>Share that is use</b>: 0% = the model only creates bullets, 100% = it only uses them, 50% = balanced.</p>")
     bal_items = [(m, round(100 * (100 * ma[m] / max(1, pm[m]["asst"])) / max(1e-9, 100 * ma[m] / max(1, pm[m]["asst"]) + 100 * written.get(m, 0) / max(1, pm[m]["asst"])), 0) if (ma[m] + written.get(m, 0)) else 0, f"{written.get(m,0)} written, {ma[m]} consulted") for m in ml if pm[m]["asst"] >= 10]
-    H.append(two(hbars("Consumer share by model", bal_items, "Consulted ÷ (written + consulted), %", "0 = only feeds taste · 50 = balanced · 100 = only uses taste", ylabel="Model", lw=230, w=620),
-                 hbars("Loop intensity by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Taste events per 100 turns (written + consulted)", "How much taste traffic the model generates", ylabel="Model", lw=230, w=620)))
-    tw_pairs = [(m, {"written / 100 turns": round(100 * written.get(m, 0) / max(1, pm[m]["asst"]), 1), "consulted / 100 turns": round(100 * ma[m] / max(1, pm[m]["asst"]), 1)}) for m in ml]
-    tw_cols = {"written / 100 turns": "var(--accent)", "consulted / 100 turns": "var(--bar)"}
-    OV["twoway"] = flex(stacked_h("Model → taste vs taste → model", [(m, {k: v for k, v in d.items()}) for m, d in tw_pairs], list(tw_cols), tw_cols, "Per 100 assistant turns", "Model", "Blue = bullets the model's sessions produced. Grey = times the model consulted taste.", w=620), legend(tw_cols, "Direction"))
+    H.append(two(hbars("Share of taste traffic that is use", bal_items, "Uses ÷ (created + used), %", "0 = only creates bullets · 50 = balanced · 100 = only uses them", ylabel="Model", lw=230, w=620),
+                 hbars("Taste traffic by model", [(m, round(100 * (ma[m] + written.get(m, 0)) / max(1, pm[m]["asst"]), 1), "") for m in ml if pm[m]["asst"] >= 10], "Created + used, per 100 turns", "How much the model interacts with taste at all", ylabel="Model", lw=230, w=620)))
+    # ---- chain of thought per model, and whether taste changes it ----
+    h3("Chain of thought by model")
+    H.append("<p class=charttip>Thinking = the visible reasoning text before a reply. Compares turns where the reasoning consulted taste with turns where it did not, for the same model, so the difference is what taste adds to (or removes from) the thinking.</p>")
+    cot_rows = []; cot_ratio = []
+    for m in ml:
+        TT = [t for s_ in sessions for t in s_["turns"] if t["model"] == m]
+        if len(TT) < 5: continue
+        with_th = [t for t in TT if t["think"] > 0]; ct = [t for t in with_th if t["cited"]]; nt = [t for t in with_th if not t["cited"]]
+        med_th = sorted(t["think"] for t in with_th)[len(with_th)//2] if with_th else 0
+        mean = lambda xs, k: (sum(x[k] for x in xs) / len(xs)) if xs else 0
+        th_c, th_n = mean(ct, "think"), mean(nt, "think"); out_c, out_n = mean(ct, "out"), mean(nt, "out")
+        tools_c = (sum(len(t["tools"]) for t in ct) / len(ct)) if ct else 0; tools_n = (sum(len(t["tools"]) for t in nt) / len(nt)) if nt else 0
+        share_out = 100 * (sum(t["think"] for t in TT) / 4) / max(1, sum(t["out"] for t in TT))
+        ratio = (th_c / th_n) if (th_n and ct) else None
+        cot_rows.append((m, len(TT), round(100 * len(with_th) / len(TT)), fmt(med_th), round(min(100, share_out)), fmt(round(th_c)) if ct else "—", fmt(round(th_n)) if nt else "—", (f"{100*(ratio-1):+.0f}%" if ratio else "—"), (f"{100*(out_c/out_n-1):+.0f}%" if (out_n and ct) else "—"), (f"{tools_c-tools_n:+.1f}" if (ct and nt) else "—")))
+        if ratio: cot_ratio.append((m, round(ratio, 2), f"{fmt(round(th_c))} chars with taste vs {fmt(round(th_n))} without, over {len(ct)} and {len(nt)} thinking turns"))
+    H.append(table(["Model", "#Turns", "#Turns with thinking %", "#Thinking chars per thinking turn (median)", "#Thinking as % of output", "#Thinking when taste used", "#Thinking when not", "#Taste effect on thinking", "#Taste effect on reply length", "#Extra tool calls per turn with taste"], cot_rows))
+    H.append("<p class=charttip>Taste effect columns compare taste-consulting turns to the model's other turns <i>that also had thinking</i>, so turns with no reasoning at all do not skew the baseline. A positive thinking effect means the model reasons longer when it brings taste in; a negative one means taste shortcuts the reasoning. Extra tool calls above zero means taste-guided turns do more checking.</p>")
+    if cot_ratio: H.append(two(hbars("Thinking length: taste turns ÷ other turns", cot_ratio, "Ratio (1.0 = no difference)", "Above 1 = taste makes the model think longer. Below 1 = taste shortens the reasoning.", ylabel="Model", lw=230, w=620),
+                              hbars("Thinking as share of output", [(m, r[4], "") for m, r in zip([r[0] for r in cot_rows], cot_rows)], "Percent of output tokens that are reasoning (est.)", "Thinking chars ÷ 4 over output tokens", ylabel="Model", lw=230, w=620)))
+    tw_pairs = [(m, {"created / 100 turns": round(100 * written.get(m, 0) / max(1, pm[m]["asst"]), 1), "used / 100 turns": round(100 * ma[m] / max(1, pm[m]["asst"]), 1)}) for m in ml]
+    tw_cols = {"created / 100 turns": "var(--accent)", "used / 100 turns": "var(--bar)"}
+    OV["twoway"] = flex(stacked_h("Creates taste vs uses taste, by model", [(m, {k: v for k, v in d.items()}) for m, d in tw_pairs], list(tw_cols), tw_cols, "Per 100 assistant turns", "Model", "Blue = new bullets created from its sessions. Grey = times it used a bullet.", w=620), legend(tw_cols, "Direction"))
     H.append(OV["twoway"])
     H.append(two(hbars("Taste activations per 100 turns, by model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "How often each model consults the taste file", ylabel="Model", lw=230, w=620),
                  hbars("Thinking volume per turn, by model", [(m, round(pm[m]["think"] / max(1, pm[m]["asst"])), "") for m in ml], "Thinking characters per assistant turn", "Models that think more have more room to consult taste", ylabel="Model", lw=230, w=620)))

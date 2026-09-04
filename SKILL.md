@@ -57,7 +57,8 @@ Global controls: Today (trailing 24 h, hourly charts, local time) / 7 days / 30 
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
 - **Bullet date**: earliest learned-from session sharing ≥3 distinctive words with the bullet; undated bullets are interpolated between dated neighbours in file order.
 - **Cost**: `usage.costUsd` as logged; free tiers show 0.
-- **Loop intensity**: bullets written + bullets consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.
+- **Chain of thought**: thinking = visible reasoning text. Taste effect = mean thinking/reply length/tool calls on taste-consulting turns vs the same model's other thinking turns.
+- **Taste traffic** (was loop intensity): bullets written + bullets consulted, per 100 assistant turns, per model. **Consumer share**: consulted ÷ (written + consulted); 0% = only feeds taste, 100% = only uses it.
 - **Compact numbers**: 40.1k, 1.2M everywhere; trailing zeros trimmed.
 
 ## Design rules (for anyone extending the page)
