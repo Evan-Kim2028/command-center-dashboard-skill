@@ -83,6 +83,7 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 
 - Single HTML file, no external assets, inline SVG charts drawn by the helpers `hbars`, `stacked_h`, `stacked_v`.
 - Always quote SVG attribute values. An unquoted `stroke-width=1.5/>` silently swallows every following element.
+- Dark-mode text: `--fg #f2f4f8`, `--muted #aab2c2` (about 7:1 on the surface), `--muted2` for de-emphasized table cells; value labels and tick numbers use `--fg`, never `--muted`.
 - Theme via CSS variables on `<html data-theme>`; charts must use `var(--fg)`, `var(--muted)`, `var(--grid)`, `var(--bar)`, never hard-coded colors.
 - Model colors come from `model_color()`: one hue per provider (the part before `/`, or openai/anthropic/google by prefix), a distinct shade per model within that provider, identical everywhere on the page including both sides of the sankey. Sources that are not models (Claude Code, unmatched) are neutral greys.
 - The range and theme controls live inside the sticky tab bar so they float with the tabs, and a second row lists the current tab's sections (every `h3`) as jump links.
