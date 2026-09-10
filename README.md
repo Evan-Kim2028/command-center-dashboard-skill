@@ -1,6 +1,6 @@
 # Command Center dashboard
 
-A single-file HTML dashboard of what your coding CLIs have done on your machine: per-model cost, token usage and speed, sessions, tools and prompts — for [Command Code](https://commandcode.ai), Claude Code, Grok and Devin — plus the Command Code taste file and when taste steers the model.
+A single-file HTML dashboard of what your coding CLIs have done on your machine: per-model cost, token usage and speed, sessions, tools and prompts — for [Command Code](https://commandcode.ai), Claude Code, Grok, Devin and cursor-agent — plus the Command Code taste file and when taste steers the model.
 
 Python 3.10+, no packages. One optional read-only call to api.commandcode.ai for your billed total (`--offline` to skip).
 
@@ -43,7 +43,7 @@ python3 cmd_dashboard.py --harness claude        # Claude Code instead of cmd
 python3 cmd_dashboard.py --harness grok --compare none
 ```
 
-`--harness cmd|claude|grok|devin` picks whose sessions fill Overview / Models / Usage; the Harnesses tab compares them side by side. Costs are list-price estimates — Grok is flat-rate on a subscription and Devin bills in ACUs, so neither figure is what you paid.
+`--harness cmd|claude|grok|devin|cursor` picks whose sessions fill Overview / Models / Usage; the Harnesses tab compares them side by side. Costs are list-price estimates — Grok is flat-rate on a subscription and Devin bills in ACUs, so neither figure is what you paid. cursor-agent records no tokens or cost locally and appears as activity only.
 
 Run it from the project you use cmd in. If the current directory has no sessions it picks the project with the most and says so.
 

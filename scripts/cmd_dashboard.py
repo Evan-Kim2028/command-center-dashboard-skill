@@ -12,7 +12,7 @@ ap.add_argument("--no-open", action="store_true")
 ap.add_argument("--redact", default=None, help="JSON file with extra [[pattern, replacement], ...]")
 ap.add_argument("--list", action="store_true", help="list Command Code project dirs found on this machine and exit")
 ap.add_argument("--offline", action="store_true", help="skip the read-only call to api.commandcode.ai for provider-billed totals")
-ap.add_argument("--harness", default="cmd", choices=["cmd", "claude", "grok", "devin"], help="which harness the main tabs describe (default cmd)")
+ap.add_argument("--harness", default="cmd", choices=["cmd", "claude", "grok", "devin", "cursor"], help="which harness the main tabs describe (default cmd)")
 ap.add_argument("--compare", default="all", help="comma-separated harnesses to show in the Harnesses tab, or 'none' to skip it")
 A = ap.parse_args()
 HOME = os.path.expanduser("~")
@@ -527,7 +527,7 @@ try:
     import harness_readers as HR
 except Exception as e:
     HR = None; print(f"note: harness_readers unavailable ({e}); Command Code only", file=sys.stderr)
-for s_ in sessions: s_["harness"] = "cmd"; s_.setdefault("unpriced", 0); s_.setdefault("sidechain_turns", 0)
+for s_ in sessions: s_["harness"] = "cmd"; s_.setdefault("unpriced", 0); s_.setdefault("sidechain_turns", 0); s_.setdefault("tokens_known", True)
 HARNESS_SESSIONS = {"cmd": sessions}
 HARNESS_TPS = {"cmd": tps_samples}
 WANT = [] if not HR else ([h for h in HR.HARNESSES if h != "cmd"] if A.compare == "all"
@@ -538,6 +538,7 @@ for h in WANT:
         if h == "claude": sv, tv = HR.read_claude(price_turn)
         elif h == "grok": sv, tv = HR.read_grok()
         elif h == "devin": sv, tv, DEVIN_GAP = HR.read_devin()
+        elif h == "cursor": sv, tv = HR.read_cursor()
         else: continue
     except Exception as e:
         print(f"note: {h} reader failed ({e})", file=sys.stderr); continue
@@ -961,19 +962,28 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         h3("Side by side")
         H.append(kpi([("harnesses", len(order), "Coding CLIs with usable local records on this machine."),
                       ("sessions", fmt(sum(len(hs[h]) for h in order)), "Across every harness, in this range."),
-                      ("cost estimate", f"${sum(_tot(hs[h], 'cost') for h in order):,.2f}", "List-price estimate. Grok and Devin are billed by subscription or credits, so their figures are what the same traffic would cost on the API, not what you paid."),
-                      ("input tokens", fmt(sum(_tot(hs[h], 'inp') for h in order)), "Everything sent, every turn, cache included."),
-                      ("output tokens", fmt(sum(_tot(hs[h], 'out') for h in order)), "Everything generated, reasoning included.")]))
-        H.append(table(["Harness", "#Sessions", "#Turns", "#Prompts", "#Input tokens", "#Cache %", "#Output tokens", "#Cost $", "#Unpriced turns", "#Output tok/s", "First", "Last"],
-                       [(HL.get(h, h), len(hs[h]), fmt(_tot(hs[h], "asst")), fmt(_tot(hs[h], "user")), fmt(_tot(hs[h], "inp")),
-                         round(100 * _tot(hs[h], "cr") / max(1, _tot(hs[h], "inp"))), fmt(_tot(hs[h], "out")),
-                         round(_tot(hs[h], "cost"), 2), fmt(sum(x.get("unpriced", 0) for x in hs[h])), round(med(tps_by_h[h]), 1) if tps_by_h[h] else "-",
-                         min(x["date"] for x in hs[h]), max(x["date"] for x in hs[h])) for h in order]))
-        H.append(two(hbars("Cost by Harness", [(HL.get(h, h), round(_tot(hs[h], "cost"), 2), HR.ESTIMATE_NOTE.get(h, "") if HR else "") for h in order], "USD", "List prices · not necessarily what you were billed", ylabel="Harness", lw=170, w=620),
+                      ("cost estimate", f"${sum(_tot([x for x in hs[h] if x.get('tokens_known', True)], 'cost') for h in order):,.2f}", "List-price estimate over the sessions that record tokens. Grok and Devin are billed by subscription or credits, so their figures are what the same traffic would cost on the API, not what you paid."),
+                      ("input tokens", fmt(sum(_tot([x for x in hs[h] if x.get('tokens_known', True)], 'inp') for h in order)), "Everything sent, every turn, cache included."),
+                      ("output tokens", fmt(sum(_tot([x for x in hs[h] if x.get('tokens_known', True)], 'out') for h in order)), "Everything generated, reasoning included.")]))
+        def _tok(cv): return [x for x in cv if x.get("tokens_known", True)]
+        rowsh = []
+        for h in order:
+            cv = hs[h]; kv = _tok(cv)
+            inp_, out_, cr_ = _tot(kv, "inp"), _tot(kv, "out"), _tot(kv, "cr")
+            rowsh.append((HL.get(h, h), len(cv), f"{len(kv)} of {len(cv)}", fmt(_tot(cv, "asst")), fmt(_tot(cv, "user")),
+                          fmt(inp_) if kv else "-", round(100 * cr_ / max(1, inp_)) if inp_ else "-",
+                          fmt(out_) if kv else "-", round(_tot(kv, "cost"), 2) if kv else "-",
+                          fmt(sum(x.get("unpriced", 0) for x in kv)) if kv else "-",
+                          round(med(tps_by_h[h]), 1) if tps_by_h[h] else "-",
+                          min(x["date"] for x in cv), max(x["date"] for x in cv)))
+        H.append(table(["Harness", "#Sessions", "Sessions with tokens", "#Turns", "#Prompts", "#Input tokens", "#Cache %", "#Output tokens", "#Cost $", "#Unpriced turns", "#Output tok/s", "First", "Last"], rowsh))
+        H.append(two(hbars("Cost by Harness", [(HL.get(h, h), round(_tot(_tok(hs[h]), "cost"), 2), HR.ESTIMATE_NOTE.get(h, "") if HR else "") for h in order if _tok(hs[h])], "USD", "List prices · not necessarily what you were billed", ylabel="Harness", lw=170, w=620),
                      hbars("Output Speed by Harness", [(HL.get(h, h), round(med(tps_by_h[h]), 1), f"median of {len(tps_by_h[h])} samples") for h in order if tps_by_h[h]], "Output tokens per second (median)", "Grok reports this natively; the others are derived from timestamps", ylabel="Harness", lw=170, w=620)))
-        H.append(two(flex(stacked_h("Tokens by Harness", [(HL.get(h, h), {"cached input": _tot(hs[h], "cr"), "uncached input": _tot(hs[h], "inp") - _tot(hs[h], "cr"), "output": _tot(hs[h], "out")}) for h in order], ["cached input", "uncached input", "output"], TOKC_H, "Tokens", "Harness", "Input split by cache, plus output", w=620), legend(TOKC_H, "Token type")),
+        H.append(two(flex(stacked_h("Tokens by Harness", [(HL.get(h, h), {"cached input": _tot(_tok(hs[h]), "cr"), "uncached input": _tot(_tok(hs[h]), "inp") - _tot(_tok(hs[h]), "cr"), "output": _tot(_tok(hs[h]), "out")}) for h in order if _tok(hs[h])], ["cached input", "uncached input", "output"], TOKC_H, "Tokens", "Harness", "Input split by cache, plus output", w=620), legend(TOKC_H, "Token type")),
                      hbars("Sessions by Harness", [(HL.get(h, h), len(hs[h]), "") for h in order], "Sessions", "Sessions with at least one recorded turn in this range", ylabel="Harness", lw=170, w=620)))
-        caveats = ["<b>Grok</b> — <code>unified.jsonl</code> is rotated and usually holds only the last few days, so older Grok work is missing entirely. Cost is the xAI list-price equivalent; SuperGrok Heavy is flat-rate.",
+        caveats = ["<b>Sessions with tokens</b> — the rest are counted from what their harness does record: when they ran, how many turns and tool calls, which model. They contribute to activity and never to tokens or cost. Turn timestamps inside them are spread evenly across the session window, because only the window is stored.",
+                   "<b>Grok</b> — <code>unified.jsonl</code> is truncated in place, not rotated, so per-inference tokens exist only for the last few days; nothing on disk reconstructs the rest (<code>contextTokensUsed</code> undercounts real prompt tokens by 3-10x and will not scale into them). The newer per-session <code>usage.json</code> fixes this going forward. Cost is the xAI list-price equivalent; SuperGrok Heavy is flat-rate.",
+                   "<b>cursor-agent</b> — records no tokens, cost, cache or latency anywhere locally, so it appears as activity only. Its model column is a session-level label from the AI-code ledger, not per-request attribution.",
                    "<b>Devin</b> — only about one session in seven keeps a transcript" + (f" ({DEVIN_GAP['with_transcript']} of {DEVIN_GAP['sessions_in_db']})" if 'DEVIN_GAP' in globals() else "") + ", so its tokens and cost undercount. Devin bills in ACUs, and SWE-2 High has no published per-token rate, so those turns carry tokens but no dollars.",
                    "<b>Claude Code</b> — subagent transcripts are folded into their parent session; they are the majority of the turns.",
                    "<b>Unpriced turns</b> — turns on a model with no rate in the local catalog contribute tokens but $0, so any harness with a high count is undercosted.",

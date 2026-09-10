@@ -55,6 +55,7 @@ ESTIMATE_NOTE = {
     "grok": "API-equivalent at xAI list prices; SuperGrok Heavy is flat-rate, so this is not what you paid.",
     "devin": "Upstream model rates from docs.devin.ai; Devin bills in ACUs/credits, so this is not what you paid.",
     "claude": "Priced from the Command Code model catalog.",
+    "cursor": "cursor-agent records no tokens or cost locally, so it has none to show.",
     "cmd": "Priced from the Command Code model catalog.",
 }
 
@@ -78,7 +79,7 @@ def _blank(sid, harness, title=""):
         push=0, push_after_cite=0, push_after_nocite=0, first_in=None,
         prompts=[], turns=[], models=collections.Counter(), tools=collections.Counter(),
         skills=collections.Counter(), bullets_hit=collections.Counter(),
-        pm=collections.defaultdict(collections.Counter), unpriced=0,
+        pm=collections.defaultdict(collections.Counter), unpriced=0, tokens_known=True,
     )
 
 
@@ -134,6 +135,28 @@ def _iso(ts):
         ts += "Z"
     return ts
 
+
+
+def _spread(S, n, t0, t1, model, tools=None):
+    """Add n zero-token turns evenly across [t0, t1].
+
+    Some harnesses record how many turns a session had and when it ran, but not
+    what each turn cost. Rather than drop the session or invent token counts, we
+    keep the real turn and tool counts and interpolate only the timing, so the
+    session still lands in the right day/hour bucket. Sessions built this way
+    carry tokens_known=False and are excluded from token and cost totals.
+    """
+    n = max(1, int(n))
+    span = max(0.0, (t1 - t0).total_seconds())
+    for i in range(n):
+        at = t0 + datetime.timedelta(seconds=span * (i + 0.5) / n)
+        t = _turn(_iso(at.isoformat(timespec="milliseconds")), model, 0, 0, 0, 0.0, True)
+        t["estimated_ts"] = True
+        _add(S, t)
+    for name, c in (tools or {}).items():
+        S["tools"][name] += c
+        if S["turns"]:
+            S["turns"][-1]["tools"] += [name] * c
 
 # ------------------------------------------------------------ Claude Code ---
 def read_claude(price_turn=None, root=None, limit_files=None):
@@ -239,20 +262,28 @@ def _secs(a, b):
 
 
 # ----------------------------------------------------------------- Grok ----
-def read_grok(root=None):
-    """~/.grok/logs/unified.jsonl inference events, joined to session metadata.
+def read_grok(root=None, shape_only=True):
+    """Grok keeps token counts in three places, in descending order of fidelity:
 
-    The log is rotated: it typically holds only the last few days, while
-    ~/.grok/sessions goes back further. Sessions with no surviving log lines
-    are skipped rather than shown with zero tokens.
+    1. `<session>/usage.json` — exact per-session and per-turn tokens. New as of
+       2026-09-10; only sessions from that day forward have it.
+    2. `~/.grok/logs/unified.jsonl` — exact per-inference tokens, native
+       tokens_per_sec and ttft_ms. Truncated in place rather than rotated, so it
+       holds only the last few days.
+    3. `<session>/signals.json` — turns, tool calls, models, duration and
+       latency, but NO usable token count. `contextTokensUsed` is a final
+       context size that undercounts real prompt tokens by 3-10x and cannot be
+       scaled into one (tested: p90 error above 80% even fitted in-sample).
+
+    With shape_only the sessions that only have (3) are still included, so
+    sessions/day, model mix and tool use cover the full history; they carry
+    tokens_known=False and contribute no tokens or cost.
     """
     root = root or os.path.join(HOME, ".grok")
+    sess_root = os.path.join(root, "sessions")
     log = os.path.join(root, "logs", "unified.jsonl")
-    if not os.path.exists(log):
-        return [], []
 
     meta = {}
-    sess_root = os.path.join(root, "sessions")
     if os.path.isdir(sess_root):
         for cwd_dir in os.listdir(sess_root):
             d = os.path.join(sess_root, cwd_dir)
@@ -260,7 +291,8 @@ def read_grok(root=None):
                 continue
             cwd = urllib.parse.unquote(cwd_dir)
             for sid in os.listdir(d):
-                sfile = os.path.join(d, sid, "summary.json")
+                sdir = os.path.join(d, sid)
+                sfile = os.path.join(sdir, "summary.json")
                 if not os.path.exists(sfile):
                     continue
                 try:
@@ -268,47 +300,117 @@ def read_grok(root=None):
                 except Exception:
                     continue
                 meta[j.get("info", {}).get("id") or sid] = dict(
+                    dir=sdir, cwd=cwd,
                     model=j.get("current_model_id") or "?",
+                    created=j.get("created_at"), updated=j.get("updated_at"),
                     title=j.get("session_summary") or os.path.basename(cwd) or sid[:8])
 
-    S_by = {}
-    tps = []
-    with open(log, errors="replace") as fh:
-        for line in fh:
+    S_by, tps, exact = {}, [], set()
+
+    # (1) usage.json - exact, wins wherever it exists
+    for sid, info in meta.items():
+        uf = os.path.join(info["dir"], "usage.json")
+        if not os.path.exists(uf):
+            continue
+        try:
+            u = json.load(open(uf))
+        except Exception:
+            continue
+        S = S_by.setdefault(sid, _blank(sid, "grok", info["title"]))
+        for turn in u.get("turns") or []:
+            ts = _iso(turn.get("endedAt") or info.get("updated") or "")
+            if not ts:
+                continue
+            for mdl, mu in (turn.get("modelUsage") or {}).items():
+                inp = mu.get("inputTokens", 0) or 0
+                cr = mu.get("cachedReadTokens", 0) or 0
+                o_tok = mu.get("outputTokens", 0) or 0
+                cost, priced = price(mdl, inp, cr, o_tok)
+                _add(S, _turn(ts, mdl, inp, o_tok, cr, cost, priced))
+        if S["asst"]:
+            exact.add(sid)
+
+    # (2) unified.jsonl - exact per inference, for sessions usage.json misses
+    if os.path.exists(log):
+        with open(log, errors="replace") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                sid, msg, ts = r.get("sid"), r.get("msg"), _iso(r.get("ts") or "")
+                if not sid or not ts or sid in exact:
+                    continue
+                ctx = r.get("ctx") or {}
+                if msg == "shell.turn.inference_done":
+                    info = meta.get(sid, {})
+                    mdl = info.get("model") or "?"
+                    S = S_by.setdefault(sid, _blank(sid, "grok", info.get("title", sid[:8])))
+                    inp = ctx.get("prompt_tokens", 0) or 0
+                    cr = ctx.get("cached_prompt_tokens", 0) or 0
+                    o_tok = ctx.get("completion_tokens", 0) or 0
+                    cost, priced = price(mdl, inp, cr, o_tok)
+                    t = _turn(ts, mdl, inp, o_tok, cr, cost, priced)
+                    # reasoning_tokens are a subset of completion_tokens, not an addition
+                    t["reasoning"] = ctx.get("reasoning_tokens", 0) or 0
+                    t["ttft_ms"] = ctx.get("ttft_ms")
+                    t["tps"] = ctx.get("tokens_per_sec")
+                    _add(S, t)
+                    if t["tps"]:
+                        tps.append((mdl, float(t["tps"])))
+                elif msg == "shell.tool.exec_done":
+                    S = S_by.get(sid)
+                    if S is not None and ctx.get("tool_name"):
+                        S["tools"][ctx["tool_name"]] += 1
+                        if S["turns"]:
+                            S["turns"][-1]["tools"].append(ctx["tool_name"])
+                elif msg == "shell.prompt.queued":
+                    if sid in meta or sid in S_by:
+                        S = S_by.setdefault(sid, _blank(sid, "grok", meta.get(sid, {}).get("title", sid[:8])))
+                        S["prompts"].append((ts, "", False, False))
+    for sid in list(S_by):
+        if S_by[sid]["asst"]:
+            exact.add(sid)
+
+    # (3) signals.json - shape only, no tokens
+    shape = 0
+    if shape_only:
+        for sid, info in meta.items():
+            if sid in exact:
+                continue
             try:
-                r = json.loads(line)
+                g = json.load(open(os.path.join(info["dir"], "signals.json")))
             except Exception:
                 continue
-            sid, msg, ts = r.get("sid"), r.get("msg"), _iso(r.get("ts") or "")
-            if not sid or not ts:
+            t0 = _dt(info.get("created")); t1 = _dt(info.get("updated")) or t0
+            if not t0:
                 continue
-            ctx = r.get("ctx") or {}
-            if msg == "shell.turn.inference_done":
-                info = meta.get(sid, {})
-                mdl = info.get("model") or "?"
-                S = S_by.setdefault(sid, _blank(sid, "grok", info.get("title", sid[:8])))
-                inp = ctx.get("prompt_tokens", 0) or 0
-                cr = ctx.get("cached_prompt_tokens", 0) or 0
-                o_tok = ctx.get("completion_tokens", 0) or 0
-                cost, priced = price(mdl, inp, cr, o_tok)
-                t = _turn(ts, mdl, inp, o_tok, cr, cost, priced)
-                # reasoning_tokens are a subset of completion_tokens, not an addition
-                t["reasoning"] = ctx.get("reasoning_tokens", 0) or 0
-                t["ttft_ms"] = ctx.get("ttft_ms")
-                t["tps"] = ctx.get("tokens_per_sec")
-                _add(S, t)
-                if t["tps"]:
-                    tps.append((mdl, float(t["tps"])))
-            elif msg == "shell.tool.exec_done":
-                S = S_by.get(sid)
-                if S is not None and ctx.get("tool_name"):
-                    S["tools"][ctx["tool_name"]] += 1
-                    if S["turns"]:
-                        S["turns"][-1]["tools"].append(ctx["tool_name"])
-            elif msg == "shell.prompt.queued":
-                S = S_by.setdefault(sid, _blank(sid, "grok", meta.get(sid, {}).get("title", sid[:8])))
-                S["prompts"].append((ts, "", False, False))
-    return [x for x in (_finish(s) for s in S_by.values()) if x], tps
+            S = _blank(sid, "grok", info["title"])
+            S["tokens_known"] = False
+            mdl = g.get("primaryModelId") or info.get("model") or "?"
+            tools = {n: 0 for n in (g.get("toolsUsed") or [])}
+            if tools:
+                per = int(g.get("toolCallCount", 0) or 0) // max(1, len(tools))
+                tools = {n: per for n in tools}
+            _spread(S, g.get("assistantMessageCount") or g.get("turnCount") or 1, t0, t1, mdl, tools)
+            for i in range(int(g.get("userMessageCount", 0) or 0)):
+                S["prompts"].append((_iso(t0.isoformat(timespec="milliseconds")), "", False, False))
+            S = _finish(S)
+            if S:
+                S_by[sid] = S
+                shape += 1
+
+    out = [x for x in (s if s.get("first") else _finish(s) for s in S_by.values()) if x]
+    return out, tps
+
+
+def _dt(s):
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "").replace("+00:00", "").split(".")[0])
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- Devin ----
@@ -380,6 +482,100 @@ def read_devin(root=None):
     return out, tps, gap
 
 
-HARNESSES = ["cmd", "claude", "grok", "devin"]
-LABELS = {"cmd": "Command Code", "claude": "Claude Code", "grok": "Grok", "devin": "Devin"}
-COLORS = {"cmd": "#3ecf8e", "claude": "#f5a524", "grok": "#5b9cf6", "devin": "#a78bfa"}
+# ---------------------------------------------------------- cursor-agent ---
+def read_cursor(root=None):
+    """cursor-agent keeps no usage telemetry: there is no token, cost, cache or
+    latency field in any local store (checked ~/.cursor/chats/*/*/store.db,
+    ~/.cursor/projects/*/agent-transcripts/*.jsonl and
+    ~/.cursor/ai-tracking/ai-code-tracking.db).
+
+    What is real: sessions and their windows, turn counts, tool calls, prompt
+    counts, subagent structure, and a session-level model label. Every session
+    is returned with tokens_known=False, so it counts toward activity but never
+    toward tokens or cost.
+    """
+    root = root or os.path.join(HOME, ".cursor")
+    chats = os.path.join(root, "chats")
+    if not os.path.isdir(chats):
+        return [], []
+
+    # model per conversation, from the AI-authored-code ledger. Session level and
+    # approximate: it is a per-code-hash ledger, not a per-request one.
+    models = {}
+    track = os.path.join(root, "ai-tracking", "ai-code-tracking.db")
+    if os.path.exists(track):
+        try:
+            con = sqlite3.connect("file:%s?mode=ro" % track, uri=True)
+            for cid, mdl, n in con.execute(
+                    "select conversationId, model, count(*) c from ai_code_hashes "
+                    "where model is not null group by conversationId, model order by c desc"):
+                models.setdefault(cid, mdl)
+            con.close()
+        except Exception:
+            pass
+
+    # turns, tools and prompts from the flat transcripts (42 MB, fast)
+    tx = {}
+    proj = os.path.join(root, "projects")
+    if os.path.isdir(proj):
+        for dirpath, _d, names in os.walk(proj):
+            for n in names:
+                if not n.endswith(".jsonl"):
+                    continue
+                tid = n[:-6]
+                rec = tx.setdefault(tid, dict(asst=0, user=0, tools=collections.Counter()))
+                try:
+                    fh = open(os.path.join(dirpath, n), errors="ignore")
+                except OSError:
+                    continue
+                with fh:
+                    for line in fh:
+                        try:
+                            o = json.loads(line)
+                        except Exception:
+                            continue
+                        role = o.get("role")
+                        content = (o.get("message") or {}).get("content") or []
+                        if role == "assistant":
+                            rec["asst"] += 1
+                            for c in content:
+                                if isinstance(c, dict) and c.get("type") == "tool_use":
+                                    rec["tools"][c.get("name") or c.get("toolName") or "?"] += 1
+                        elif role == "user":
+                            rec["user"] += 1
+
+    out = []
+    for ws in sorted(os.listdir(chats)):
+        wsd = os.path.join(chats, ws)
+        if not os.path.isdir(wsd):
+            continue
+        for sid in sorted(os.listdir(wsd)):
+            mf = os.path.join(wsd, sid, "meta.json")
+            if not os.path.exists(mf):
+                continue
+            try:
+                m = json.load(open(mf))
+            except Exception:
+                continue
+            c0, c1 = m.get("createdAtMs"), m.get("updatedAtMs")
+            if not c0:
+                continue
+            t0 = datetime.datetime.utcfromtimestamp(c0 / 1000)
+            t1 = datetime.datetime.utcfromtimestamp((c1 or c0) / 1000)
+            rec = tx.get(sid) or dict(asst=0, user=0, tools=collections.Counter())
+            S = _blank(sid, "cursor", sid[:8])
+            S["tokens_known"] = False
+            S["subagent"] = bool(m.get("isSubagent"))
+            _spread(S, rec["asst"] or 1, t0, t1, models.get(sid, "cursor (model not recorded)"), rec["tools"])
+            S["sidechain_turns"] = S["asst"] if S["subagent"] else 0
+            for _ in range(rec["user"]):
+                S["prompts"].append((_iso(t0.isoformat(timespec="milliseconds")), "", False, False))
+            S = _finish(S)
+            if S:
+                out.append(S)
+    return out, []
+
+
+HARNESSES = ["cmd", "claude", "grok", "devin", "cursor"]
+LABELS = {"cmd": "Command Code", "claude": "Claude Code", "grok": "Grok", "devin": "Devin", "cursor": "cursor-agent"}
+COLORS = {"cmd": "#3ecf8e", "claude": "#f5a524", "grok": "#5b9cf6", "devin": "#a78bfa", "cursor": "#e879a8"}

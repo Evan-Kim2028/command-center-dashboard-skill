@@ -1,6 +1,6 @@
 ---
 name: command-center-dashboard
-description: Build a self-contained HTML dashboard of what your coding CLIs have done on this machine — per-model cost, token usage and speed, sessions, tools and prompts for Command Code, Claude Code, Grok and Devin, plus the Command Code taste file and how often taste steers the model. Use when the user asks for a cmd dashboard, taste dashboard, "what does Command Code think of me", a cost or token report for any of those CLIs, or wants to compare harnesses. Works on any machine with ~/.commandcode; no dependencies beyond Python 3.10+.
+description: Build a self-contained HTML dashboard of what your coding CLIs have done on this machine — per-model cost, token usage and speed, sessions, tools and prompts for Command Code, Claude Code, Grok, Devin and cursor-agent, plus the Command Code taste file and how often taste steers the model. Use when the user asks for a cmd dashboard, taste dashboard, "what does Command Code think of me", a cost or token report for any of those CLIs, or wants to compare harnesses. Works on any machine with ~/.commandcode; no dependencies beyond Python 3.10+.
 ---
 
 # Command Center dashboard
@@ -36,8 +36,10 @@ python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --harness claude          # main t
 python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --harness grok --compare none   # Grok only, no comparison tab
 ```
 
-`--harness cmd|claude|grok|devin` (default `cmd`) chooses whose sessions fill Overview / Models / Usage. Only cmd has a taste file, so the Taste, Influence and Health tabs are hidden for the others.
+`--harness cmd|claude|grok|devin|cursor` (default `cmd`) chooses whose sessions fill Overview / Models / Usage. Only cmd has a taste file, so the Taste, Influence and Health tabs are hidden for the others.
 `--compare` is a comma-separated list of harnesses for the Harnesses tab (default `all`, or `none` to skip it). Reading every Claude Code transcript takes about 12 s on a 2 GB history; the other readers are instant.
+
+Not every harness records tokens. Sessions that don't are still included — their real turn, tool and prompt counts drive the activity charts — but they carry `tokens_known=False` and never contribute tokens or cost. Their turn timestamps are spread evenly across the session window, because only the window is stored. The Harnesses tab shows this as a "Sessions with tokens" column.
 
 Then tell the user the output path. Open it with `xdg-open file://<path>` (Linux) or `open <path>` (macOS).
 If the user asks for a shareable version, use `--public` and remind them to review the redaction list first.
@@ -56,6 +58,7 @@ If the user asks for a shareable version, use `--public` and remind them to revi
 | Claude Code sessions | `~/.claude/projects/<slug>/<id>.jsonl` and `<slug>/<id>/subagents/agent-*.jsonl` | turns, `message.usage` tokens, model, tool calls, prompts; subagent files fold into their parent session |
 | Grok sessions | `~/.grok/logs/unified.jsonl` (`shell.turn.inference_done`, `shell.tool.exec_done`, `shell.prompt.queued`), joined by `sid` to `~/.grok/sessions/<cwd>/<id>/summary.json` | per-inference tokens, native `tokens_per_sec` and `ttft_ms`, model, tools, prompt count |
 | Devin sessions | `~/.local/share/devin/cli/transcripts/*.json` (ATIF-v1.7, `steps[].metrics`) + `sessions.db` for titles and the coverage gap | per-step tokens, model, prompts |
+| cursor-agent sessions | `~/.cursor/chats/<workspace>/<id>/meta.json`, `~/.cursor/projects/*/agent-transcripts/*.jsonl`, `~/.cursor/ai-tracking/ai-code-tracking.db` | session windows, subagent flag, turns, tool calls, prompts, session-level model label. No tokens exist anywhere in this store |
 
 Readers for the other harnesses live in `scripts/harness_readers.py` beside the main script and return the same session shape, so every chart works unchanged. A harness with nothing on disk is skipped silently.
 
@@ -86,7 +89,7 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
 - **Learning date**: earliest learned-from session sharing ≥3 distinctive words with the learning; undated learnings are interpolated between dated neighbours in file order.
 - **Cost across harnesses**: each harness is priced at published list rates, which is *not* what you were billed. Grok is the xAI list-price equivalent (`docs.x.ai/developers/pricing`, verified 2026-09-10, including the doubled rate above a 200k-token prompt) while SuperGrok Heavy is flat-rate. Devin is priced at the upstream model rates it publishes (`docs.devin.ai/desktop/models`) while Cognition bills in ACUs/credits by action complexity; SWE-2 High has no published per-token rate and stays unpriced. Rates live in `PRICES` in `harness_readers.py`; a model with no entry contributes tokens but $0 and is counted in the Unpriced turns column. Add an entry only from a primary vendor page.
-- **Coverage is not equal**: Grok's `unified.jsonl` is rotated and usually holds only the last few days. Devin keeps a transcript for roughly one session in seven. Claude Code and cmd keep everything. Compare rates, not totals, unless the date ranges match.
+- **Coverage is not equal**: Grok's `unified.jsonl` is truncated in place (not rotated), so per-inference tokens survive only for the last few days out of ~962 sessions; the newer per-session `usage.json` fixes this going forward, and nothing on disk reconstructs the past — `contextTokensUsed` undercounts real prompt tokens by 3-10x and no scaling of it clears a p90 error below 80%, so no estimator ships. Devin keeps a transcript for roughly one session in seven. cursor-agent stores no usage telemetry at all. Claude Code and cmd keep everything. Compare rates, not totals, unless the date ranges match.
 - **Cost**: priced per turn from Command Code's bundled model catalog (`dist/bundled/command-code-knowledge/reference/models.md`: `$in/$out · cache $c` per million) as uncached input × in + cached input × cache + output × out. The CLI's own `usage.costUsd` charges cached input at the full input rate and overstates cache-heavy models by up to ~12×; it is shown as "CLI-logged" for comparison and used only for models missing from the catalog. The dashboard also makes one read-only call per range to `https://api.commandcode.ai/alpha/usage/summary` with the key in `~/.commandcode/auth.json` (the same call the CLI's `/usage` makes) and shows the provider-billed total beside the estimate; pass `--offline` to skip it. That billed total is the 1:1 number; the per-model split is the catalog estimate. Subagent model calls, background taste learning, title generation and compaction are never written to the session transcripts, so they appear only in the billed total; the Overview shows this as "not captured locally".
 - Chart titles are presentation style: Title Case noun phrases ("Output Speed by Model"); subtitles state the measure and scope ("Median output tokens per second, wall clock"), never sentences addressed to the reader.
 - **Chain of thought**: thinking = visible reasoning text. Taste effect = mean thinking/reply length/tool calls on taste-consulting turns vs the same model's other thinking turns.
