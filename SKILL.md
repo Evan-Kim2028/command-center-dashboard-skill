@@ -1,6 +1,6 @@
 ---
 name: command-center-dashboard
-description: Build a self-contained HTML dashboard of everything Command Code (cmd) has learned and done on this machine — the taste file, how often taste steers the model, per-model cost/tokens/speed, sessions, tools, prompts, and taste-file health. Use when the user asks for a cmd dashboard, taste dashboard, "what does Command Code think of me", cmd cost or token report, or wants to see whether taste is being used. Works on any machine with ~/.commandcode; no dependencies beyond Python 3.10+.
+description: Build a self-contained HTML dashboard of what your coding CLIs have done on this machine — per-model cost, token usage and speed, sessions, tools and prompts for Command Code, Claude Code, Grok and Devin, plus the Command Code taste file and how often taste steers the model. Use when the user asks for a cmd dashboard, taste dashboard, "what does Command Code think of me", a cost or token report for any of those CLIs, or wants to compare harnesses. Works on any machine with ~/.commandcode; no dependencies beyond Python 3.10+.
 ---
 
 # Command Center dashboard
@@ -32,7 +32,12 @@ python3 "$SKILL_DIR/scripts/cmd_dashboard.py"                     # private buil
 python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --public            # redacted build safe to share
 python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --list              # show which cmd project dirs have sessions
 python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --project ~/work/repo --out /tmp/dash.html --no-open
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --harness claude          # main tabs describe Claude Code instead of cmd
+python3 "$SKILL_DIR/scripts/cmd_dashboard.py" --harness grok --compare none   # Grok only, no comparison tab
 ```
+
+`--harness cmd|claude|grok|devin` (default `cmd`) chooses whose sessions fill Overview / Models / Usage. Only cmd has a taste file, so the Taste, Influence and Health tabs are hidden for the others.
+`--compare` is a comma-separated list of harnesses for the Harnesses tab (default `all`, or `none` to skip it). Reading every Claude Code transcript takes about 12 s on a 2 GB history; the other readers are instant.
 
 Then tell the user the output path. Open it with `xdg-open file://<path>` (Linux) or `open <path>` (macOS).
 If the user asks for a shareable version, use `--public` and remind them to review the redaction list first.
@@ -48,6 +53,11 @@ If the user asks for a shareable version, use `--public` and remind them to revi
 | Claude Code transcripts | `~/.claude/projects/*/<id>.jsonl` (only the ids in the ledger) | dating each learning and naming its source |
 | Cursor transcripts | `~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl` (ledger ids; turn dates parsed from the `<timestamp>` prose) | same |
 | Redaction rules | `<project>/.commandcode/redact.json` or `~/.commandcode/redact.json` (optional) | `--public` builds |
+| Claude Code sessions | `~/.claude/projects/<slug>/<id>.jsonl` and `<slug>/<id>/subagents/agent-*.jsonl` | turns, `message.usage` tokens, model, tool calls, prompts; subagent files fold into their parent session |
+| Grok sessions | `~/.grok/logs/unified.jsonl` (`shell.turn.inference_done`, `shell.tool.exec_done`, `shell.prompt.queued`), joined by `sid` to `~/.grok/sessions/<cwd>/<id>/summary.json` | per-inference tokens, native `tokens_per_sec` and `ttft_ms`, model, tools, prompt count |
+| Devin sessions | `~/.local/share/devin/cli/transcripts/*.json` (ATIF-v1.7, `steps[].metrics`) + `sessions.db` for titles and the coverage gap | per-step tokens, model, prompts |
+
+Readers for the other harnesses live in `scripts/harness_readers.py` beside the main script and return the same session shape, so every chart works unchanged. A harness with nothing on disk is skipped silently.
 
 `<slug>` is the project path lower-cased with non-alphanumerics replaced by `-` (what cmd itself uses).
 If the current directory has no cmd sessions the script falls back to the project dir with the most sessions and says so on stderr.
@@ -56,12 +66,13 @@ If the current directory has no cmd sessions the script falls back to the projec
 
 Six tabs. Each answers one question; charts are not repeated across tabs.
 
-1. **Overview** (default): Insights card (generated sentences: cost concentration, taste consult leaders, learning producers, fastest model, taste's effect on reasoning with its causality caveat, models that mention taste without reasoning, unused-learning share), then logged cost, input tokens, cache hit, a Cost/Tokens toggle on the per-bucket charts (tokens by model), output tok/s, taste share of prompt, taste use per 100 turns, steering share, unused learnings. Each KPI appears on one tab only; Overview holds the cost, speed and taste-effect rates. Charts: cost by model, output speed by model, taste activations per 100 turns by model, activations per learning by habit, activations by habit, habits by work area, session timeline.
-2. **Taste**: what the file says. Learnings learned in the selected range: habits by work area, where learnings came from (Claude Code / cmd + model / unmatched), learnings learned per week by source, and a paginated learning table with area, habit, date and text filters, sorted by date descending.
+1. **Overview** (default): model usage, cost and tokens — no taste. Insights card (cost concentration, fastest model, last activity), then cost estimate, provider-billed, input tokens, cache hit, output tokens, output tok/s, models used, assistant turns. Sections: Activity (assistant turns per bucket beside output speed by model), Cost (cost per bucket beside cost by model), Tokens (tokens per bucket beside tokens by model, split cached / uncached / output), Sessions (timeline). Cost and tokens are separate charts, never a toggle.
+2. **Taste** — Command Code only: what the file says, and every taste rate. Learnings learned in the selected range: habits by work area, where learnings came from (Claude Code / cmd + model / unmatched), learnings learned per week by source, and a paginated learning table with area, habit, date and text filters, sorted by date descending.
 3. **Influence**: when taste steps in. Activations by habit split into steering vs mention, activations per learning, most-activated learnings, activations per day, pushback proxy, skills invoked alongside taste, steering quotes.
 4. **Models**: per-message attribution. Sankey of taste flow (sources → taste.md → consuming models). Self-preference: for each model, the share of its consultations that hit learnings its own sessions created, versus its share of the file (1.0 = no bias). Creates-vs-uses is a 100% stacked bar per model (share of its own taste traffic), beside taste traffic per 100 turns. Two-way influence table: learnings written per 100 turns (model → taste) beside activations per 100 turns (taste → model). Turns, input/output tokens, cache hit, cost, tokens per turn, output tok/s, thinking per turn, activation rate and steering share per model; weekly model mix.
 5. **Usage**: session timeline bubble chart, prompts per week, tool calls, and prompt openings, prompt length, prompts by hour and weekday each stacked by the model the session ran; sessions table (collapsed, sortable).
-6. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, learning length, base prompt size per session, learnings added over time, never-activated learnings, longest learnings, duplicates.
+6. **Harnesses**: one row per CLI — sessions, turns, prompts, input tokens, cache %, output tokens, cost, unpriced turns, median output tok/s, and the date range each source actually covers. Charts: cost, tokens, speed and sessions by harness. Ends with a caveats card, which is the point of the tab: the numbers are not like-for-like.
+7. **Health**: taste-file hygiene. Size and share of prompt, confidence distribution, learning length, base prompt size per session, learnings added over time, never-activated learnings, longest learnings, duplicates.
 
 Global controls: Today / 7 days / 30 days / All time. Every chart follows the range, including both sides of the sankey and the created-vs-used rates (learnings count as created in a range when their learned-from session falls in it). Time charts adapt their buckets to the range (1 h, 6 h, 1 day, 1 week, local time), each with a Per period / Cumulative switch. Ranges clip every session by message timestamp, so cost, tokens, activations and prompts are exact for the window; defaults to the shortest range with data, Dark / Light, always opens on Overview. Deep links: `file:///…/cmd-dashboard.html#range=all&tab=Usage`. Every table column cycles descending → ascending → original order on click, Dark / Light (persisted), tooltips on every KPI.
 
@@ -74,6 +85,8 @@ Global controls: Today / 7 days / 30 days / All time. Every chart follows the ra
 - **Steering**: an activation whose sentence continues with so / should / must / instead / before / never / avoid / skip.
 - **Output tok/s**: output tokens ÷ (assistant `meta.createdAt` − previous record time). `timestamp` on records is a flush time, not completion, so do not use it for durations.
 - **Learning date**: earliest learned-from session sharing ≥3 distinctive words with the learning; undated learnings are interpolated between dated neighbours in file order.
+- **Cost across harnesses**: each harness is priced at published list rates, which is *not* what you were billed. Grok is the xAI list-price equivalent (`docs.x.ai/developers/pricing`, verified 2026-09-10, including the doubled rate above a 200k-token prompt) while SuperGrok Heavy is flat-rate. Devin is priced at the upstream model rates it publishes (`docs.devin.ai/desktop/models`) while Cognition bills in ACUs/credits by action complexity; SWE-2 High has no published per-token rate and stays unpriced. Rates live in `PRICES` in `harness_readers.py`; a model with no entry contributes tokens but $0 and is counted in the Unpriced turns column. Add an entry only from a primary vendor page.
+- **Coverage is not equal**: Grok's `unified.jsonl` is rotated and usually holds only the last few days. Devin keeps a transcript for roughly one session in seven. Claude Code and cmd keep everything. Compare rates, not totals, unless the date ranges match.
 - **Cost**: priced per turn from Command Code's bundled model catalog (`dist/bundled/command-code-knowledge/reference/models.md`: `$in/$out · cache $c` per million) as uncached input × in + cached input × cache + output × out. The CLI's own `usage.costUsd` charges cached input at the full input rate and overstates cache-heavy models by up to ~12×; it is shown as "CLI-logged" for comparison and used only for models missing from the catalog. The dashboard also makes one read-only call per range to `https://api.commandcode.ai/alpha/usage/summary` with the key in `~/.commandcode/auth.json` (the same call the CLI's `/usage` makes) and shows the provider-billed total beside the estimate; pass `--offline` to skip it. That billed total is the 1:1 number; the per-model split is the catalog estimate. Subagent model calls, background taste learning, title generation and compaction are never written to the session transcripts, so they appear only in the billed total; the Overview shows this as "not captured locally".
 - Chart titles are presentation style: Title Case noun phrases ("Output Speed by Model"); subtitles state the measure and scope ("Median output tokens per second, wall clock"), never sentences addressed to the reader.
 - **Chain of thought**: thinking = visible reasoning text. Taste effect = mean thinking/reply length/tool calls on taste-consulting turns vs the same model's other thinking turns.
@@ -114,6 +127,7 @@ After building, confirm:
 
 ```bash
 grep -c "id='tab-Overview" <out.html>      # ≥ 1 per range view
+grep -c "id='tab-Harnesses" <out.html>      # comparison tab, unless --compare none
 grep -c "Session timeline" <out.html>       # timeline bubble chart present (≥ 2, one per range view)
 python3 -c "import json,re;h=open('<out.html>').read();print(len(h)//1024,'KB')"
 ```

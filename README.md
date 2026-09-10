@@ -1,6 +1,6 @@
 # Command Center dashboard
 
-A single-file HTML dashboard of everything [Command Code](https://commandcode.ai) has learned and done on your machine: the taste file, when taste steers the model, per-model cost, tokens and speed, sessions, and taste-file health.
+A single-file HTML dashboard of what your coding CLIs have done on your machine: per-model cost, token usage and speed, sessions, tools and prompts — for [Command Code](https://commandcode.ai), Claude Code, Grok and Devin — plus the Command Code taste file and when taste steers the model.
 
 Python 3.10+, no packages. One optional read-only call to api.commandcode.ai for your billed total (`--offline` to skip).
 
@@ -20,7 +20,10 @@ Script only:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Evan-Kim2028/command-center-dashboard-skill/main/scripts/cmd_dashboard.py -o cmd_dashboard.py
+curl -fsSL https://raw.githubusercontent.com/Evan-Kim2028/command-center-dashboard-skill/main/scripts/harness_readers.py -o harness_readers.py
 ```
+
+`harness_readers.py` must sit beside `cmd_dashboard.py`. Without it the dashboard still builds, Command Code only.
 
 ## Use
 
@@ -36,7 +39,11 @@ Or directly:
 python3 cmd_dashboard.py            # private build, opens in your browser
 python3 cmd_dashboard.py --public   # names and paths redacted, safe to share
 python3 cmd_dashboard.py --list     # show which cmd projects have sessions
+python3 cmd_dashboard.py --harness claude        # Claude Code instead of cmd
+python3 cmd_dashboard.py --harness grok --compare none
 ```
+
+`--harness cmd|claude|grok|devin` picks whose sessions fill Overview / Models / Usage; the Harnesses tab compares them side by side. Costs are list-price estimates — Grok is flat-rate on a subscription and Devin bills in ACUs, so neither figure is what you paid.
 
 Run it from the project you use cmd in. If the current directory has no sessions it picks the project with the most and says so.
 

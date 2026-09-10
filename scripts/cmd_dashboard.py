@@ -12,6 +12,8 @@ ap.add_argument("--no-open", action="store_true")
 ap.add_argument("--redact", default=None, help="JSON file with extra [[pattern, replacement], ...]")
 ap.add_argument("--list", action="store_true", help="list Command Code project dirs found on this machine and exit")
 ap.add_argument("--offline", action="store_true", help="skip the read-only call to api.commandcode.ai for provider-billed totals")
+ap.add_argument("--harness", default="cmd", choices=["cmd", "claude", "grok", "devin"], help="which harness the main tabs describe (default cmd)")
+ap.add_argument("--compare", default="all", help="comma-separated harnesses to show in the Harnesses tab, or 'none' to skip it")
 A = ap.parse_args()
 HOME = os.path.expanduser("~")
 PROJ = os.path.abspath(A.project)
@@ -519,10 +521,41 @@ svg.attn g.bar:not(.hot) rect{opacity:.45}svg.attn g.bar:not(.hot) text{opacity:
 @media(prefers-reduced-motion:reduce){.tab.on.anim>*,.tab.on.anim rect.hb,.tab.on.anim rect.vb{animation:none}button:active{scale:1}.reveal{opacity:1;translate:0 0;transition:none}}
 </style>"""]
 
+# ---------------- other harnesses ----------------
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import harness_readers as HR
+except Exception as e:
+    HR = None; print(f"note: harness_readers unavailable ({e}); Command Code only", file=sys.stderr)
+for s_ in sessions: s_["harness"] = "cmd"; s_.setdefault("unpriced", 0); s_.setdefault("sidechain_turns", 0)
+HARNESS_SESSIONS = {"cmd": sessions}
+HARNESS_TPS = {"cmd": tps_samples}
+WANT = [] if not HR else ([h for h in HR.HARNESSES if h != "cmd"] if A.compare == "all"
+                          else [h.strip() for h in A.compare.split(",") if h.strip() and h.strip() != "cmd"])
+if HR and A.harness != "cmd" and A.harness not in WANT: WANT.append(A.harness)
+for h in WANT:
+    try:
+        if h == "claude": sv, tv = HR.read_claude(price_turn)
+        elif h == "grok": sv, tv = HR.read_grok()
+        elif h == "devin": sv, tv, DEVIN_GAP = HR.read_devin()
+        else: continue
+    except Exception as e:
+        print(f"note: {h} reader failed ({e})", file=sys.stderr); continue
+    sv.sort(key=lambda x: x["date"])
+    HARNESS_SESSIONS[h] = sv; HARNESS_TPS[h] = tv
+HARNESS = A.harness
+if HARNESS != "cmd":
+    sessions = HARNESS_SESSIONS.get(HARNESS, [])
+    tps_samples = HARNESS_TPS.get(HARNESS, [])
+    acts = []; steer_quotes = []; skill_events = []
+    if not sessions: sys.exit(f"no {HARNESS} sessions found on this machine")
+CMD_ONLY_TABS = {"Taste", "Influence", "Health"}
+
 ROWS_ALL = rows
 ALL_SESSIONS = sessions
 _pm_all = collections.Counter()
-for s_ in sessions: _pm_all.update(s_["models"])
+for _sv in HARNESS_SESSIONS.values():
+    for s_ in _sv: _pm_all.update(s_["models"])
 ALL_MODELS = [m for m, _ in _pm_all.most_common()]
 # Color scheme: one hue per provider, shades per model within the provider. Stable for the whole page.
 _HUES = [150, 215, 35, 0, 265, 330, 185, 70, 300, 100, 20, 240]
@@ -545,6 +578,7 @@ def model_color(m):
     return f"hsl({hue} {sat}% {light}%)"
 ALL_MCOLS = {m: model_color(m) for m in ALL_MODELS}
 PROVIDER_COLS = {pv: f"hsl({_HUES[i % len(_HUES)]} 62% 55%)" for i, pv in enumerate(_prov_order)}
+TOKC_H = {"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}
 def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     rows_r = rows if rows_r is None else rows_r
     def _local(ts):
@@ -603,12 +637,16 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     for r in rows: r["acts"] = act_by_b[r["i"] - 1]; r["steers"] = steer_by_b[r["i"] - 1]
 
 
-    TABS = [("Overview", "Cost, speed and taste at a glance"), ("Taste", "What the file says about you"), ("Influence", "When taste steps in"), ("Models", "How each model spends and behaves"), ("Usage", "Sessions, tools and prompts"), ("Health", "Is the taste file in good shape")]
+    TABS = [("Overview", "Model usage, cost and tokens"), ("Taste", "What the file says about you · Command Code only"), ("Influence", "When taste steps in"), ("Models", "How each model spends and behaves"), ("Usage", "Sessions, tools and prompts"), ("Health", "Is the taste file in good shape")]
+    if len(HARNESS_SESSIONS) > 1 and A.compare != "none": TABS.append(("Harnesses", "Cost, tokens and speed across your coding CLIs"))
+    if HARNESS != "cmd": TABS = [t for t in TABS if t[0] not in CMD_ONLY_TABS]
+    HIDDEN_TABS = CMD_ONLY_TABS if HARNESS != "cmd" else set()
     cur = [None]
     def tab(name):
         if cur[0]: H.append("</div>")
-        cur[0] = name; desc = dict(TABS)[name]
-        H.append(f"<div class=tab id='tab-{name}{SUF}'><p class=tabdesc>{esc(desc)}.</p>")
+        cur[0] = name; desc = dict(TABS).get(name, "")
+        hide = " style='display:none'" if name in HIDDEN_TABS else ""
+        H.append(f"<div class=tab id='tab-{name}{SUF}'{hide}><p class=tabdesc>{esc(desc)}.</p>")
     SECS = collections.OrderedDict(); _sec = [0]
     def sec_id(t): _sec[0] += 1; return f"s{_sec[0]}{SUF}"
     def h3(t, target=None):
@@ -625,6 +663,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
 
     # ================= TASTE =================
     tab("Taste")
+    H.append(f"<!--TASTEINS{SUF}-->")
     H.append(kpi([("learnings in file", len(rows), "One learning = one learned preference or fact, stored as a line in taste.md. The whole file is injected regardless of range."), ("gained in this range", len(rows_r), "Learnings whose learned-from session falls inside the selected range."), ("est. tokens", fmt(est_tokens), "Bytes ÷ 4, about ±20%. Sent with every request."), ("median confidence", f"{sorted(r['conf'] for r in rows)[len(rows)//2]:.2f}", "The learner attaches a 0 to 1 confidence to each learning. Higher means it saw the preference repeated or stated explicitly."), ("sessions learned from · " + ", ".join(f'{k} {v}' for k, v in learned.items()), sum(learned.values()), "Sessions from other coding agents that cmd mined to build this file.")]))
     rows_main_r = [r for r in rows_r if r["domain"] in KEEP]; dc_r = collections.Counter(r["domain"] for r in rows_main_r)
     grid = [(t, {d: sum(1 for r in rows_main_r if r["domain"] == d and t in r["traits"]) for d in dl}) for t in tl]
@@ -711,6 +750,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
                  hbars("Output Tokens per Turn by Model", [(m, round(pm[m]["out"] / max(1, pm[m]["asst"])), "") for m in ml], "Output tokens per assistant turn", "Mean output tokens per assistant turn, reasoning included", ylabel="Model", lw=230, w=620)))
     OV["speed"] = hbars("Output Speed by Model", [(m, round(tps_med[m], 1), f"median of {sum(1 for mm, _ in tps_samples if mm == m)} timed turns") for m in ml], "Output tokens per second (median turn)", "Median output tokens per second, wall clock", ylabel="Model", lw=230, w=620)
     OV["cost"] = hbars("Cost by Model", [(m, round(pm[m]["cost"], 2), "") for m in ml], "USD", "Catalog prices · free tiers $0", ylabel="Model", lw=230, w=620)
+    OV["tokens"] = flex(stacked_h("Tokens by Model", [(m, {"cached input": pm[m]["cr"], "uncached input": pm[m]["inp"] - pm[m]["cr"], "output": pm[m]["out"]}) for m in ml], ["cached input", "uncached input", "output"], {"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}, "Tokens", "Model", "Input split by cache, plus output · reasoning included", w=620), legend({"cached input": "var(--bar2)", "uncached input": "var(--accent)", "output": "#3ecf8e"}, "Token type"))
     OV["model"] = hbars("Taste Activations per 100 Turns by Model", [(m, round(100 * ma[m] / max(1, pm[m]["asst"]), 1), f"{ma[m]} activations over {pm[m]['asst']} turns") for m in ml], "Activations per 100 assistant turns", "Consultations per 100 assistant turns", ylabel="Model", lw=230, w=620)
     # ---- two-way influence: model -> harness (bullets written) vs harness -> model (activations) ----
     written = collections.Counter()
@@ -847,7 +887,7 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     out.append(T((TL + TW - TR) / 2, TH - 12, "Time (local)", 13, "bold", "middle")); out.append(T(16, (TH - TB + 50) / 2, "Assistant turns", 13, "bold", "middle", rot=True))
     for s in sorted(sessions, key=lambda s: -s["minutes"]):
         r = 4 + math.sqrt(max(1, s["minutes"])) * 0.55
-        out.append(f"<circle cx='{tx(s['first']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {s['cites']} taste activations</title></circle>")
+        out.append(f"<circle cx='{tx(s['first']):.0f}' cy='{ty(s['asst']):.0f}' r='{r:.1f}' fill='{mcols.get(s['model'], 'var(--muted)')}' opacity='0.75' stroke='var(--bg)' stroke-width='1'><title>{esc(s['date'])} · {esc(s['title'] or s['sid'])}\n{esc(s['model'])}\n{s['user']} prompts · {s['asst']} turns · {s['minutes']} min · ${s['cost']:.2f} · {fmt(s['inp']+s['out'])} tokens</title></circle>")
     OV["timeline"] = flex("".join(out) + "</svg>", legend(mcols, "Model"))
     H.append(OV["timeline"])
     weeks_u = collections.OrderedDict()
@@ -906,11 +946,45 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     h3("Longest learnings"); H.append("<details><summary>Show " + str(len(long_b)) + " over 300 chars</summary><ul>" + "".join(f"<li><span class=muted>#{r['i']} · {r['n']} chars</span> {esc(r['text'][:160])}…</li>" for r in sorted(long_b, key=lambda r: -r["n"])) + "</ul></details>")
     if dups: h3("Near-duplicates"); H.append("<ul>" + "".join(f"<li>#{rows[i]['i']} ≈ #{rows[j]['i']}: {esc(rows[i]['text'][:100])}…</li>" for i, j in dups) + "</ul>")
     H.append("</div>")
-    ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Cost, speed and taste at a glance.</p>"]
+    if len(HARNESS_SESSIONS) > 1 and A.compare != "none":
+        tab("Harnesses")
+        HL = HR.LABELS if HR else {}
+        HC = HR.COLORS if HR else {}
+        hs = {}
+        for h, sv in HARNESS_SESSIONS.items():
+            cv = [x for x in (clip_session(s_, cut) for s_ in sv) if x] if cut != "0000" else sv
+            if cv: hs[h] = cv
+        order = [h for h in (HR.HARNESSES if HR else sorted(hs)) if h in hs]
+        def _tot(cv, k): return sum(x[k] for x in cv)
+        hcols = {HL.get(h, h): HC.get(h, "var(--bar)") for h in order}
+        tps_by_h = {h: [v for _, v in HARNESS_TPS.get(h, [])] for h in order}
+        h3("Side by side")
+        H.append(kpi([("harnesses", len(order), "Coding CLIs with usable local records on this machine."),
+                      ("sessions", fmt(sum(len(hs[h]) for h in order)), "Across every harness, in this range."),
+                      ("cost estimate", f"${sum(_tot(hs[h], 'cost') for h in order):,.2f}", "List-price estimate. Grok and Devin are billed by subscription or credits, so their figures are what the same traffic would cost on the API, not what you paid."),
+                      ("input tokens", fmt(sum(_tot(hs[h], 'inp') for h in order)), "Everything sent, every turn, cache included."),
+                      ("output tokens", fmt(sum(_tot(hs[h], 'out') for h in order)), "Everything generated, reasoning included.")]))
+        H.append(table(["Harness", "#Sessions", "#Turns", "#Prompts", "#Input tokens", "#Cache %", "#Output tokens", "#Cost $", "#Unpriced turns", "#Output tok/s", "First", "Last"],
+                       [(HL.get(h, h), len(hs[h]), fmt(_tot(hs[h], "asst")), fmt(_tot(hs[h], "user")), fmt(_tot(hs[h], "inp")),
+                         round(100 * _tot(hs[h], "cr") / max(1, _tot(hs[h], "inp"))), fmt(_tot(hs[h], "out")),
+                         round(_tot(hs[h], "cost"), 2), fmt(sum(x.get("unpriced", 0) for x in hs[h])), round(med(tps_by_h[h]), 1) if tps_by_h[h] else "-",
+                         min(x["date"] for x in hs[h]), max(x["date"] for x in hs[h])) for h in order]))
+        H.append(two(hbars("Cost by Harness", [(HL.get(h, h), round(_tot(hs[h], "cost"), 2), HR.ESTIMATE_NOTE.get(h, "") if HR else "") for h in order], "USD", "List prices · not necessarily what you were billed", ylabel="Harness", lw=170, w=620),
+                     hbars("Output Speed by Harness", [(HL.get(h, h), round(med(tps_by_h[h]), 1), f"median of {len(tps_by_h[h])} samples") for h in order if tps_by_h[h]], "Output tokens per second (median)", "Grok reports this natively; the others are derived from timestamps", ylabel="Harness", lw=170, w=620)))
+        H.append(two(flex(stacked_h("Tokens by Harness", [(HL.get(h, h), {"cached input": _tot(hs[h], "cr"), "uncached input": _tot(hs[h], "inp") - _tot(hs[h], "cr"), "output": _tot(hs[h], "out")}) for h in order], ["cached input", "uncached input", "output"], TOKC_H, "Tokens", "Harness", "Input split by cache, plus output", w=620), legend(TOKC_H, "Token type")),
+                     hbars("Sessions by Harness", [(HL.get(h, h), len(hs[h]), "") for h in order], "Sessions", "Sessions with at least one recorded turn in this range", ylabel="Harness", lw=170, w=620)))
+        caveats = ["<b>Grok</b> — <code>unified.jsonl</code> is rotated and usually holds only the last few days, so older Grok work is missing entirely. Cost is the xAI list-price equivalent; SuperGrok Heavy is flat-rate.",
+                   "<b>Devin</b> — only about one session in seven keeps a transcript" + (f" ({DEVIN_GAP['with_transcript']} of {DEVIN_GAP['sessions_in_db']})" if 'DEVIN_GAP' in globals() else "") + ", so its tokens and cost undercount. Devin bills in ACUs, and SWE-2 High has no published per-token rate, so those turns carry tokens but no dollars.",
+                   "<b>Claude Code</b> — subagent transcripts are folded into their parent session; they are the majority of the turns.",
+                   "<b>Unpriced turns</b> — turns on a model with no rate in the local catalog contribute tokens but $0, so any harness with a high count is undercosted.",
+                   "<b>Speed</b> — only Grok reports tokens per second itself. Elsewhere it is output tokens over the gap between records, which still contains tool time and network latency."]
+        H.append("<div class=card><b>Read this before comparing</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{c}</li>" for c in caveats) + "</ul></div>")
+
+    ov = [f"<div class=tab id='tab-Overview{SUF}'><p class=tabdesc>Model usage, cost and tokens.</p>"]
     bill = provider_usage(cut)
     bill_kpi = [("billed by provider", f"${bill['cost']:,.2f}", f"Command Code's own usage ledger for this range ({fmt(bill['requests'])} requests, {fmt(bill['tokens_in'])} tokens in). The number your bill is based on."), ("not captured locally", f"${max(0, bill['cost'] - tot_cost):,.2f}", f"Billed minus the estimate. Subagent model calls, background taste learning, title generation and compaction are not written to the session transcripts, so they cannot be attributed to a model here. {fmt(max(0, bill['requests'] - sum(s_['asst'] for s_ in sessions)))} of {fmt(bill['requests'])} billed requests have no local record.")] if bill else []
-    ov.append(kpi([("cost estimate", f"${tot_cost:,.2f}", "Priced per turn from Command Code's model catalog: uncached input, cached input at the cache rate, output. Free tiers are $0. Covers the sessions of this project only.")] + bill_kpi + [ ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, taste file included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")]))
-    ins = []
+    ov.append(kpi([("cost estimate", f"${tot_cost:,.2f}", "Priced per turn from Command Code's model catalog: uncached input, cached input at the cache rate, output. Free tiers are $0. Covers the sessions of this project only.")] + bill_kpi + [ ("input tokens", fmt(tot_in), "Everything sent to the model, every turn, system prompt and context included."), ("cache hit", f"{100*tot_cr/max(1,tot_in):.0f}%", "Share of input served from the prompt cache instead of re-billed."), ("output tokens", fmt(tot_out), "Everything the models generated, reasoning included."), ("output tok/s", round(med([v for _, v in tps_samples]), 1), "Wall-clock output speed you experienced, median turn."), ("models used", len(ml), "Distinct models that produced at least one assistant turn."), ("assistant turns", fmt(sum(s['asst'] for s in sessions)), "Model responses, including tool-calling steps.")]))
+    ins = []; tins = []
     if bill and bill["cost"] > 0: ins.append(f"Provider billed <b>${bill['cost']:,.2f}</b> for this range; the per-model catalog estimate covers ${tot_cost:,.2f} ({100*tot_cost/bill['cost']:.0f}%). The gap is subagent calls, background learning and other server-side requests that the CLI does not write to the transcripts.")
     if ml:
         top_cost = max(ml, key=lambda m: pm[m]["cost"]); tc_ = pm[top_cost]["cost"]
@@ -918,33 +992,31 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
         rate = {m: 100 * ma[m] / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
         if len(rate) >= 2:
             hi_m = max(rate, key=rate.get); lo_m = min(rate, key=rate.get)
-            ins.append(f"Taste is consulted most by <b>{esc(hi_m)}</b> ({rate[hi_m]:.0f} per 100 turns) and least by <b>{esc(lo_m)}</b> ({rate[lo_m]:.1f}).")
+            tins.append(f"Taste is consulted most by <b>{esc(hi_m)}</b> ({rate[hi_m]:.0f} per 100 turns) and least by <b>{esc(lo_m)}</b> ({rate[lo_m]:.1f}).")
         wr = {m: 100 * written.get(m, 0) / max(1, pm[m]["asst"]) for m in ml if pm[m]["asst"] >= 20}
         if wr and max(wr.values()) > 0:
             w_m = max(wr, key=wr.get)
-            ins.append(f"<b>{esc(w_m)}</b> sessions produce the most new learnings ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per learning written.")
+            tins.append(f"<b>{esc(w_m)}</b> sessions produce the most new learnings ({wr[w_m]:.1f} per 100 turns); overall the loop runs about {len(acts)/max(1,sum(written.values())):.0f} consultations per learning written.")
         fast = max((m for m in ml if tps_med.get(m)), key=lambda m: tps_med[m], default=None)
         if fast: ins.append(f"Fastest model: <b>{esc(fast)}</b> at {tps_med[fast]:.0f} output tok/s (median turn).")
     sb = [(r[0], r[6], r[5], r[3]) for r in self_rows if isinstance(r[6], float)] if 'self_rows' in dir() else []
     if sb:
         top_sb = max(sb, key=lambda x: x[1]); lo_sb = min(sb, key=lambda x: x[1])
-        ins.append(f"Models favour their own learnings: <b>{esc(top_sb[0])}</b> sends {top_sb[2]:.0f}% of its consultations to learnings it created, {top_sb[1]:.1f}× what a random pick from the file would give" + (f"; the least self-referential is <b>{esc(lo_sb[0])}</b> at {lo_sb[1]:.1f}×." if lo_sb[0] != top_sb[0] else "."))
+        tins.append(f"Models favour their own learnings: <b>{esc(top_sb[0])}</b> sends {top_sb[2]:.0f}% of its consultations to learnings it created, {top_sb[1]:.1f}× what a random pick from the file would give" + (f"; the least self-referential is <b>{esc(lo_sb[0])}</b> at {lo_sb[1]:.1f}×." if lo_sb[0] != top_sb[0] else "."))
     if cot_rows:
         eff = {r[0]: r[7] for r in cot_rows if isinstance(r[7], str) and r[7].endswith("%")}
         effv = {m: int(v.rstrip("%")) for m, v in eff.items()}
         if effv:
             strong = [m for m, v in effv.items() if v >= 50]; weak = [m for m, v in effv.items() if v < 20]
             lo_eff, hi_eff = min(effv.values()), max(effv.values())
-            if strong: ins.append(f"Taste is not a shortcut: on {len(strong)} of {len(effv)} models a taste-consulting turn carries {min(effv[m] for m in strong)//100+1}× to {max(effv[m] for m in strong)//100+1}× the reasoning of that model's other thinking turns. Caveat: taste tends to be consulted on harder, planning-type turns, which would run longer anyway.")
+            if strong: tins.append(f"Taste is not a shortcut: on {len(strong)} of {len(effv)} models a taste-consulting turn carries {min(effv[m] for m in strong)//100+1}× to {max(effv[m] for m in strong)//100+1}× the reasoning of that model's other thinking turns. Caveat: taste tends to be consulted on harder, planning-type turns, which would run longer anyway.")
             for m in weak:
                 ss_ = round(100 * ms[m] / max(1, ma[m])) if ma[m] else 0
-                ins.append(f"<b>{esc(m)}</b> mentions taste without reasoning about it: thinking barely changes ({eff[m]}) and only {ss_}% of its consultations change the plan.")
-    ins.append(f"{len(never)} of {len(rows)} learnings ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
+                tins.append(f"<b>{esc(m)}</b> mentions taste without reasoning about it: thinking barely changes ({eff[m]}) and only {ss_}% of its consultations change the plan.")
+    tins.append(f"{len(never)} of {len(rows)} learnings ({100*len(never)/max(1,len(rows)):.0f}%) were never consulted in this range yet ride along in every prompt.")
     if ago_min is not None: ins.insert(0, f"Last activity <b>{ago_min} min ago</b>" + (f" ({esc(last_local.strftime('%H:%M'))} local)" if last_local else "") + ". Re-run the script to refresh.")
     cur[0] = "Overview"
-    ov.append("<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
     ov.append("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in ins) + "</ul></div>")
-    h3("Taste flow", ov); ov.append(OV.get("sankey", "")); ov.append(two(OV.get("twoway", ""), OV.get("work", ""))); ov.append(OV.get("self", ""))
     h3("Activity", ov)
     th_ = by_hour([dict(_s=t["model"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
     ch_ = by_hour([dict(_s=t["model"], _v=t["cost"], ts=t["ts"]) for s_ in sessions for t in s_["turns"]], lambda a: a["ts"][:19])
@@ -956,13 +1028,15 @@ def build(SUF, rows, sessions, acts, rows_r=None, gran="day", cut="0000"):
     cost_pane = tseries(f"Cost {PER.title()}", [(l, {m: round(v, 3) for m, v in c.items()}) for l, c in ch_.items()], ml, mcols, BUCKET_WORD.capitalize(), "USD", "By model · catalog prices · free tiers $0", w=620, h=320, leg=legend(mcols, "Model"), nested=True)
     tok_pane = tseries(f"Tokens {PER.title()}", [(l, dict(c)) for l, c in tk_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Tokens", f"By model · {cache_share:.0f}% of input from cache", w=620, h=320, leg=legend(mcols, "Model"), nested=True)
     ov.append(two(tseries(f"Assistant Turns {PER.title()}", [(l, dict(c)) for l, c in th_.items()], ml, mcols, BUCKET_WORD.capitalize(), "Turns", w=620, h=320, leg=legend(mcols, "Model")),
-                  toggle([("Cost", cost_pane), ("Tokens", tok_pane)])))
-    h3("Cost and speed", ov)
-    ov.append("" if True else "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>")
-    ov.append(two(OV.get("cost", ""), OV.get("speed", "")))
-    h3("Habits", ov); ov.append(two(OV.get("infl", ""), OV.get("habits", "")))
+                  OV.get("speed", "")))
+    h3("Cost", ov); ov.append(two(cost_pane, OV.get("cost", "")))
+    h3("Tokens", ov); ov.append(two(tok_pane, OV.get("tokens", "")))
     h3("Sessions", ov); ov.append(OV.get("timeline", ""))
     ov.append("</div>")
+    TASTE_CARD = "<div class=card><b>Taste</b> is the file of learned preferences cmd pastes into every prompt. An <b>activation</b> is a moment the model's reasoning consulted one learning; <b>steering</b> means it then changed the plan. Hover any <span class=tip>?</span> for a definition. Counts are keyword-matched and approximate.</div>"
+    taste_kpi = kpi([("taste share of prompt", f"{100*est_tokens/max(1, latest_in):.0f}%", "How much of each request the taste file occupies."), ("taste use per 100 turns", round(100 * len(acts) / max(1, sum(s['asst'] for s in sessions)), 1), "How often the model's reasoning consulted a taste learning."), ("steering share", f"{100*n_steer/max(1,len(acts)):.0f}%", "Of those consultations, how often the plan changed."), ("unused learnings", len(never), "Learnings injected into every prompt but never consulted in this range.")])
+    taste_block = TASTE_CARD + taste_kpi + ("<div class=card><b>Insights</b><ul style='margin:6px 0 0'>" + "".join(f"<li>{x}</li>" for x in tins) + "</ul></div>" if tins else "")
+    H = [x.replace(f"<!--TASTEINS{SUF}-->", taste_block) if isinstance(x, str) and "TASTEINS" in x else x for x in H]
     H[0:0] = ov
     subnav = "".join(f"<div class=subnav data-for='{n}{SUF}'>" + "".join(f"<a href='#{i}'>{esc(t)}</a>" for i, t in SECS.get(n, [])) + "</div>" for n, _ in TABS)
     H.insert(0, "<div class=tabs><div class=tabrow><div class=tabbtns>" + "".join(f"<button data-tab='{n}{SUF}'>{n}</button>" for n, _ in TABS) + "</div>" + CTL + "</div>" + subnav + "</div>")
